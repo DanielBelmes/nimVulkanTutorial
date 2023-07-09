@@ -122,14 +122,14 @@ proc createInstance(self: VulkanTutorialApp) =
     if enableValidationLayers and not checkValidationLayerSupport():
         raise newException(RuntimeException, "validation layers requested, but not available!")
 
+    if vkCreateInstance(addr createInfo, nil, addr self.instance) != VKSuccess:
+        quit("failed to create instance")
+
     if enableValidationLayers and not enabledLayers.isNil:
         deallocCStringArray(enabledLayers)
 
     if not allExtensions.isNil:
         deallocCStringArray(allExtensions)
-
-    if vkCreateInstance(addr createInfo, nil, addr self.instance) != VKSuccess:
-        quit("failed to create instance")
 
 proc createSurface(self: VulkanTutorialApp) =
     if glfwCreateWindowSurface(self.instance, self.window, nil, addr self.surface) != VK_SUCCESS:
