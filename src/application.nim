@@ -47,17 +47,17 @@ type
         currentFrame: uint32
         framebufferResized: bool
 
-proc initWindow(self: VulkanTutorialApp) =
+proc initWindow(app: VulkanTutorialApp) =
     doAssert glfwInit()
     doAssert glfwVulkanSupported()
 
     glfwWindowHint(GLFWClientApi, GLFWNoApi)
 
-    self.window = glfwCreateWindow(WIDTH, HEIGHT, "Vulkan", nil, nil, icon = false)
-    if self.window == nil:
+    app.window = glfwCreateWindow(WIDTH, HEIGHT, "Vulkan", nil, nil, icon = false)
+    if app.window == nil:
         quit(-1)
-    setWindowUserPointer(self.window, unsafeAddr self);
-    discard setFramebufferSizeCallback(self.window, cast[GLFWFramebuffersizeFun](framebufferResizeCallback))
+    setWindowUserPointer(app.window, unsafeAddr app);
+    discard setFramebufferSizeCallback(app.window, cast[GLFWFramebuffersizeFun](framebufferResizeCallback))
 
 proc framebufferResizeCallback(window: GLFWWindow, width: int, height: int) {.cdecl.} =
     let app = cast[ptr VulkanTutorialApp](getWindowUserPointer(window))
@@ -82,7 +82,7 @@ proc checkValidationLayerSupport(): bool =
 
     return true
 
-proc createInstance(self: VulkanTutorialApp) =
+proc createInstance(app: VulkanTutorialApp) =
     var appInfo = newVkApplicationInfo(
         pApplicationName = "NimGL Vulkan Example",
         applicationVersion = vkMakeVersion(1, 0, 0),
@@ -122,7 +122,7 @@ proc createInstance(self: VulkanTutorialApp) =
     if enableValidationLayers and not checkValidationLayerSupport():
         raise newException(RuntimeException, "validation layers requested, but not available!")
 
-    if vkCreateInstance(addr createInfo, nil, addr self.instance) != VKSuccess:
+    if vkCreateInstance(addr createInfo, nil, addr app.instance) != VKSuccess:
         quit("failed to create instance")
 
     if enableValidationLayers and not enabledLayers.isNil:
@@ -131,11 +131,11 @@ proc createInstance(self: VulkanTutorialApp) =
     if not allExtensions.isNil:
         deallocCStringArray(allExtensions)
 
-proc createSurface(self: VulkanTutorialApp) =
-    if glfwCreateWindowSurface(self.instance, self.window, nil, addr self.surface) != VK_SUCCESS:
+proc createSurface(app: VulkanTutorialApp) =
+    if glfwCreateWindowSurface(app.instance, app.window, nil, addr app.surface) != VK_SUCCESS:
         raise newException(RuntimeException, "failed to create window surface")
 
-proc checkDeviceExtensionSupport(self: VulkanTutorialApp, pDevice: VkPhysicalDevice): bool =
+proc checkDeviceExtensionSupport(app: VulkanTutorialApp, pDevice: VkPhysicalDevice): bool =
     var extensionCount: uint32
     discard vkEnumerateDeviceExtensionProperties(pDevice, nil, addr extensionCount, nil)
     var availableExtensions: seq[VkExtensionProperties] = newSeq[VkExtensionProperties](extensionCount)
@@ -146,39 +146,39 @@ proc checkDeviceExtensionSupport(self: VulkanTutorialApp, pDevice: VkPhysicalDev
         requiredExtensions.excl(extension.extensionName.cStringToString)
     return requiredExtensions.len == 0
 
-proc querySwapChainSupport(self: VulkanTutorialApp, pDevice: VkPhysicalDevice): SwapChainSupportDetails =
-    discard vkGetPhysicalDeviceSurfaceCapabilitiesKHR(pDevice,self.surface,addr result.capabilities)
+proc querySwapChainSupport(app: VulkanTutorialApp, pDevice: VkPhysicalDevice): SwapChainSupportDetails =
+    discard vkGetPhysicalDeviceSurfaceCapabilitiesKHR(pDevice,app.surface,addr result.capabilities)
     var formatCount: uint32
-    discard vkGetPhysicalDeviceSurfaceFormatsKHR(pDevice, self.surface, addr formatCount, nil)
+    discard vkGetPhysicalDeviceSurfaceFormatsKHR(pDevice, app.surface, addr formatCount, nil)
 
     if formatCount != 0:
         result.formats.setLen(formatCount)
-        discard vkGetPhysicalDeviceSurfaceFormatsKHR(pDevice, self.surface, formatCount.addr, result.formats[0].addr)
+        discard vkGetPhysicalDeviceSurfaceFormatsKHR(pDevice, app.surface, formatCount.addr, result.formats[0].addr)
     var presentModeCount: uint32
-    discard vkGetPhysicalDeviceSurfacePresentModesKHR(pDevice, self.surface, presentModeCount.addr, nil)
+    discard vkGetPhysicalDeviceSurfacePresentModesKHR(pDevice, app.surface, presentModeCount.addr, nil)
     if presentModeCount != 0:
         result.presentModes.setLen(presentModeCount)
-        discard vkGetPhysicalDeviceSurfacePresentModesKHR(pDevice, self.surface, presentModeCount.addr, result.presentModes[0].addr)
+        discard vkGetPhysicalDeviceSurfacePresentModesKHR(pDevice, app.surface, presentModeCount.addr, result.presentModes[0].addr)
 
-proc chooseSwapSurfaceFormat(self: VulkanTutorialApp, availableFormats: seq[VkSurfaceFormatKHR]): VkSurfaceFormatKHR =
+proc chooseSwapSurfaceFormat(app: VulkanTutorialApp, availableFormats: seq[VkSurfaceFormatKHR]): VkSurfaceFormatKHR =
     for format in availableFormats:
         if format.format == VK_FORMAT_B8G8R8A8_SRGB and format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR:
             return format
     return availableFormats[0]
 
-proc chooseSwapPresnetMode(self: VulkanTutorialApp, availablePresentModes: seq[VkPresentModeKHR]): VkPresentModeKHR =
+proc chooseSwapPresnetMode(app: VulkanTutorialApp, availablePresentModes: seq[VkPresentModeKHR]): VkPresentModeKHR =
     for presentMode in availablePresentModes:
         if presentMode == VK_PRESENT_MODE_MAILBOX_KHR:
             return presentMode
     return VK_PRESENT_MODE_FIFO_KHR
 
-proc chooseSwapExtent(self: VulkanTutorialApp, capabilities: VkSurfaceCapabilitiesKHR): VkExtent2D =
+proc chooseSwapExtent(app: VulkanTutorialApp, capabilities: VkSurfaceCapabilitiesKHR): VkExtent2D =
     if capabilities.currentExtent.width != uint32.high:
         return capabilities.currentExtent
     else:
         var width: int32
         var height: int32
-        getFramebufferSize(self.window, addr width, addr height)
+        getFramebufferSize(app.window, addr width, addr height)
         result.width = clamp(cast[uint32](width),
                                 capabilities.minImageExtent.width,
                                 capabilities.maxImageExtent.width)
@@ -186,7 +186,7 @@ proc chooseSwapExtent(self: VulkanTutorialApp, capabilities: VkSurfaceCapabiliti
                                 capabilities.minImageExtent.height,
                                 capabilities.maxImageExtent.height)
 
-proc findQueueFamilies(self: VulkanTutorialApp, pDevice: VkPhysicalDevice): QueueFamilyIndices =
+proc findQueueFamilies(app: VulkanTutorialApp, pDevice: VkPhysicalDevice): QueueFamilyIndices =
     var queueFamilyCount: uint32 = 0
     vkGetPhysicalDeviceQueueFamilyProperties(pDevice, addr queueFamilyCount, nil)
     var queueFamilies: seq[VkQueueFamilyProperties] = newSeq[VkQueueFamilyProperties](queueFamilyCount) # [TODO] this pattern can be templated
@@ -196,7 +196,7 @@ proc findQueueFamilies(self: VulkanTutorialApp, pDevice: VkPhysicalDevice): Queu
         if (queueFamily.queueFlags.uint32 and VkQueueGraphicsBit.uint32) > 0'u32:
             result.graphicsFamily = some(index)
         var presentSupport: VkBool32 = VkBool32(VK_FALSE)
-        discard vkGetPhysicalDeviceSurfaceSupportKHR(pDevice, index, self.surface, addr presentSupport)
+        discard vkGetPhysicalDeviceSurfaceSupportKHR(pDevice, index, app.surface, addr presentSupport)
         if presentSupport.ord == 1:
             result.presentFamily = some(index)
 
@@ -204,34 +204,34 @@ proc findQueueFamilies(self: VulkanTutorialApp, pDevice: VkPhysicalDevice): Queu
             break
         index.inc
 
-proc isDeviceSuitable(self: VulkanTutorialApp, pDevice: VkPhysicalDevice): bool =
+proc isDeviceSuitable(app: VulkanTutorialApp, pDevice: VkPhysicalDevice): bool =
     var deviceProperties: VkPhysicalDeviceProperties
     vkGetPhysicalDeviceProperties(pDevice, deviceProperties.addr)
-    var indicies: QueueFamilyIndices = self.findQueueFamilies(pDevice)
-    var extensionsSupported = self.checkDeviceExtensionSupport(pDevice)
+    var indicies: QueueFamilyIndices = app.findQueueFamilies(pDevice)
+    var extensionsSupported = app.checkDeviceExtensionSupport(pDevice)
     var swapChainAdequate = false
     if extensionsSupported:
-        var swapChainSupport: SwapChainSupportDetails = self.querySwapChainSupport(pDevice)
+        var swapChainSupport: SwapChainSupportDetails = app.querySwapChainSupport(pDevice)
         swapChainAdequate = swapChainSupport.formats.len != 0 and swapChainSupport.presentModes.len != 0
     return indicies.isComplete and extensionsSupported and swapChainAdequate
 
-proc pickPhysicalDevice(self: VulkanTutorialApp) =
+proc pickPhysicalDevice(app: VulkanTutorialApp) =
     var deviceCount: uint32 = 0
-    discard vkEnumeratePhysicalDevices(self.instance, addr deviceCount, nil)
+    discard vkEnumeratePhysicalDevices(app.instance, addr deviceCount, nil)
     if(deviceCount == 0):
         raise newException(RuntimeException, "failed to find GPUs with Vulkan support!")
     var pDevices: seq[VkPhysicalDevice] = newSeq[VkPhysicalDevice](deviceCount)
-    discard vkEnumeratePhysicalDevices(self.instance, addr deviceCount, addr pDevices[0])
+    discard vkEnumeratePhysicalDevices(app.instance, addr deviceCount, addr pDevices[0])
     for pDevice in pDevices:
-        if self.isDeviceSuitable(pDevice):
-            self.physicalDevice = pDevice
+        if app.isDeviceSuitable(pDevice):
+            app.physicalDevice = pDevice
             return
 
     raise newException(RuntimeException, "failed to find a suitable GPU!")
 
-proc createLogicalDevice(self: VulkanTutorialApp) =
+proc createLogicalDevice(app: VulkanTutorialApp) =
     let
-        indices = self.findQueueFamilies(self.physicalDevice)
+        indices = app.findQueueFamilies(app.physicalDevice)
         uniqueQueueFamilies = [indices.graphicsFamily.get, indices.presentFamily.get].toHashSet
     var
         queuePriority = 1f
@@ -258,22 +258,22 @@ proc createLogicalDevice(self: VulkanTutorialApp) =
             ppEnabledExtensionNames = deviceExts
         )
 
-    if vkCreateDevice(self.physicalDevice, deviceCreateInfo.addr, nil, self.device.addr) != VKSuccess:
+    if vkCreateDevice(app.physicalDevice, deviceCreateInfo.addr, nil, app.device.addr) != VKSuccess:
         echo "failed to create logical device"
 
     if not deviceExts.isNil:
         deallocCStringArray(deviceExts)
 
-    vkGetDeviceQueue(self.device, indices.graphicsFamily.get, 0, addr self.graphicsQueue)
-    vkGetDeviceQueue(self.device, indices.presentFamily.get, 0, addr self.presentQueue)
+    vkGetDeviceQueue(app.device, indices.graphicsFamily.get, 0, addr app.graphicsQueue)
+    vkGetDeviceQueue(app.device, indices.presentFamily.get, 0, addr app.presentQueue)
 
 
-proc createSwapChain(self: VulkanTutorialApp) =
-    let swapChainSupport: SwapChainSupportDetails = self.querySwapChainSupport(self.physicalDevice)
+proc createSwapChain(app: VulkanTutorialApp) =
+    let swapChainSupport: SwapChainSupportDetails = app.querySwapChainSupport(app.physicalDevice)
 
-    let surfaceFormat: VkSurfaceFormatKHR = self.chooseSwapSurfaceFormat(swapChainSupport.formats)
-    let presentMode: VkPresentModeKHR = self.chooseSwapPresnetMode(swapChainSupport.presentModes)
-    let extent: VkExtent2D = self.chooseSwapExtent(swapChainSupport.capabilities)
+    let surfaceFormat: VkSurfaceFormatKHR = app.chooseSwapSurfaceFormat(swapChainSupport.formats)
+    let presentMode: VkPresentModeKHR = app.chooseSwapPresnetMode(swapChainSupport.presentModes)
+    let extent: VkExtent2D = app.chooseSwapExtent(swapChainSupport.capabilities)
 
     var imageCount: uint32 = swapChainSupport.capabilities.minImageCount + 1 # request one extra per recommended settings
 
@@ -282,7 +282,7 @@ proc createSwapChain(self: VulkanTutorialApp) =
 
     var createInfo = VkSwapchainCreateInfoKHR(
         sType: VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
-        surface: self.surface,
+        surface: app.surface,
         minImageCount: imageCount,
         imageFormat: surfaceFormat.format,
         imageColorSpace: surfaceFormat.colorSpace,
@@ -295,7 +295,7 @@ proc createSwapChain(self: VulkanTutorialApp) =
         clipped: VKBool32(VK_TRUE),
         oldSwapchain: VkSwapchainKHR(VK_NULL_HANDLE)
     )
-    let indices = self.findQueueFamilies(self.physicalDevice)
+    let indices = app.findQueueFamilies(app.physicalDevice)
     var queueFamilyIndicies = [indices.graphicsFamily.get, indices.presentFamily.get]
 
     if indices.graphicsFamily.get != indices.presentFamily.get:
@@ -307,39 +307,39 @@ proc createSwapChain(self: VulkanTutorialApp) =
         createInfo.queueFamilyIndexCount = 0
         createInfo.pQueueFamilyIndices = nil
 
-    if vkCreateSwapchainKHR(self.device, addr createInfo, nil, addr self.swapChain) != VK_SUCCESS:
+    if vkCreateSwapchainKHR(app.device, addr createInfo, nil, addr app.swapChain) != VK_SUCCESS:
         raise newException(RuntimeException, "failed to create swap chain!")
-    discard vkGetSwapchainImagesKHR(self.device, self.swapChain, addr imageCount, nil)
-    self.swapChainImages.setLen(imageCount)
-    discard vkGetSwapchainImagesKHR(self.device, self.swapChain, addr imageCount, addr self.swapChainImages[0])
-    self.swapChainImageFormat = surfaceFormat.format
-    self.swapChainExtent = extent
+    discard vkGetSwapchainImagesKHR(app.device, app.swapChain, addr imageCount, nil)
+    app.swapChainImages.setLen(imageCount)
+    discard vkGetSwapchainImagesKHR(app.device, app.swapChain, addr imageCount, addr app.swapChainImages[0])
+    app.swapChainImageFormat = surfaceFormat.format
+    app.swapChainExtent = extent
 
-proc createImageViews(self: VulkanTutorialApp) =
-    self.swapChainImageViews.setLen(self.swapChainImages.len)
-    for index, swapChainImage in self.swapChainImages:
+proc createImageViews(app: VulkanTutorialApp) =
+    app.swapChainImageViews.setLen(app.swapChainImages.len)
+    for index, swapChainImage in app.swapChainImages:
         var createInfo = newVkImageViewCreateInfo(
             image = swapChainImage,
             viewType = VK_IMAGE_VIEW_TYPE_2D,
-            format = self.swapChainImageFormat,
+            format = app.swapChainImageFormat,
             components = newVkComponentMapping(VK_COMPONENT_SWIZZLE_IDENTITY,VK_COMPONENT_SWIZZLE_IDENTITY,VK_COMPONENT_SWIZZLE_IDENTITY,VK_COMPONENT_SWIZZLE_IDENTITY),
             subresourceRange = newVkImageSubresourceRange(aspectMask = VkImageAspectFlags(VK_IMAGE_ASPECT_COLOR_BIT), 0.uint32, 1.uint32, 0.uint32, 1.uint32)
         )
-        if vkCreateImageView(self.device, addr createInfo, nil, addr self.swapChainImageViews[index]) != VK_SUCCESS:
+        if vkCreateImageView(app.device, addr createInfo, nil, addr app.swapChainImageViews[index]) != VK_SUCCESS:
             raise newException(RuntimeException, "failed to create image views")
 
-proc createShaderModule(self: VulkanTutorialApp, code: string) : VkShaderModule =
+proc createShaderModule(app: VulkanTutorialApp, code: string) : VkShaderModule =
     var createInfo = newVkShaderModuleCreateInfo(
         codeSize = code.len.uint32,
         pCode = cast[ptr uint32](code[0].unsafeAddr) #Hopefully reading bytecode as string is alright
     )
-    if vkCreateShaderModule(self.device, addr createInfo, nil, addr result) != VK_SUCCESS:
+    if vkCreateShaderModule(app.device, addr createInfo, nil, addr result) != VK_SUCCESS:
         raise newException(RuntimeException, "failed to create shader module")
 
-proc createRenderPass(self: VulkanTutorialApp) =
+proc createRenderPass(app: VulkanTutorialApp) =
     var
         colorAttachment: VkAttachmentDescription = newVkAttachmentDescription(
-            format = self.swapChainImageFormat,
+            format = app.swapChainImageFormat,
             samples = VK_SAMPLE_COUNT_1_BIT,
             loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
             storeOp = VK_ATTACHMENT_STORE_OP_STORE,
@@ -373,16 +373,16 @@ proc createRenderPass(self: VulkanTutorialApp) =
             dependencyCount = 1,
             pDependencies = addr dependency,
         )
-    if vkCreateRenderPass(self.device, addr renderPassInfo, nil, addr self.renderPass) != VK_SUCCESS:
+    if vkCreateRenderPass(app.device, addr renderPassInfo, nil, addr app.renderPass) != VK_SUCCESS:
         quit("failed to create render pass")
 
-proc createGraphicsPipeline(self: VulkanTutorialApp) =
+proc createGraphicsPipeline(app: VulkanTutorialApp) =
     const
         vertShaderCode: string = staticRead("./shaders/vert.spv")
         fragShaderCode: string = staticRead("./shaders/frag.spv")
     var
-        vertShaderModule: VkShaderModule = self.createShaderModule(vertShaderCode)
-        fragShaderModule: VkShaderModule = self.createShaderModule(fragShaderCode)
+        vertShaderModule: VkShaderModule = app.createShaderModule(vertShaderCode)
+        fragShaderModule: VkShaderModule = app.createShaderModule(fragShaderCode)
         vertShaderStageInfo: VkPipelineShaderStageCreateInfo = newVkPipelineShaderStageCreateInfo(
             stage = VK_SHADER_STAGE_VERTEX_BIT,
             module = vertShaderModule,
@@ -414,14 +414,14 @@ proc createGraphicsPipeline(self: VulkanTutorialApp) =
         viewport: VkViewPort = newVkViewport(
             x = 0.float,
             y = 0.float,
-            width = self.swapChainExtent.width.float32,
-            height = self.swapChainExtent.height.float32,
+            width = app.swapChainExtent.width.float32,
+            height = app.swapChainExtent.height.float32,
             minDepth = 0.float,
             maxDepth = 1.float
         )
         scissor: VkRect2D = newVkRect2D(
             offset = newVkOffset2D(0,0),
-            extent = self.swapChainExtent
+            extent = app.swapChainExtent
         )
         viewportState: VkPipelineViewportStateCreateInfo = newVkPipelineViewportStateCreateInfo(
             viewportCount = 1,
@@ -473,7 +473,7 @@ proc createGraphicsPipeline(self: VulkanTutorialApp) =
             pushConstantRangeCount = 0, # optional
             pPushConstantRanges = nil, # optional
         )
-    if vkCreatePipelineLayout(self.device, pipelineLayoutInfo.addr, nil, addr self.pipelineLayout) != VK_SUCCESS:
+    if vkCreatePipelineLayout(app.device, pipelineLayoutInfo.addr, nil, addr app.pipelineLayout) != VK_SUCCESS:
         quit("failed to create pipeline layout")
     var
         pipelineInfo: VkGraphicsPipelineCreateInfo = newVkGraphicsPipelineCreateInfo(
@@ -488,79 +488,79 @@ proc createGraphicsPipeline(self: VulkanTutorialApp) =
             pColorBlendState = colorBlending.addr,
             pDynamicState = dynamicState.addr, # optional
             pTessellationState = nil,
-            layout = self.pipelineLayout,
-            renderPass = self.renderPass,
+            layout = app.pipelineLayout,
+            renderPass = app.renderPass,
             subpass = 0,
             basePipelineHandle = VkPipeline(0), # optional
             basePipelineIndex = -1, # optional
         )
-    if vkCreateGraphicsPipelines(self.device, VkPipelineCache(0), 1, pipelineInfo.addr, nil, addr self.graphicsPipeline) != VK_SUCCESS:
+    if vkCreateGraphicsPipelines(app.device, VkPipelineCache(0), 1, pipelineInfo.addr, nil, addr app.graphicsPipeline) != VK_SUCCESS:
         quit("fialed to create graphics pipeline")
-    vkDestroyShaderModule(self.device, vertShaderModule, nil)
-    vkDestroyShaderModule(self.device, fragShaderModule, nil)
+    vkDestroyShaderModule(app.device, vertShaderModule, nil)
+    vkDestroyShaderModule(app.device, fragShaderModule, nil)
 
-proc createFrameBuffers(self: VulkanTutorialApp) =
-    self.swapChainFramebuffers.setLen(self.swapChainImageViews.len)
+proc createFrameBuffers(app: VulkanTutorialApp) =
+    app.swapChainFramebuffers.setLen(app.swapChainImageViews.len)
 
-    for index, view in self.swapChainImageViews:
+    for index, view in app.swapChainImageViews:
         var
-            attachments = [self.swapChainImageViews[index]]
+            attachments = [app.swapChainImageViews[index]]
             framebufferInfo = newVkFramebufferCreateInfo(
                 sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
-                renderPass = self.renderPass,
+                renderPass = app.renderPass,
                 attachmentCount = attachments.len.uint32,
                 pAttachments = attachments[0].addr,
-                width = self.swapChainExtent.width,
-                height = self.swapChainExtent.height,
+                width = app.swapChainExtent.width,
+                height = app.swapChainExtent.height,
                 layers = 1,
             )
-        if vkCreateFramebuffer(self.device, framebufferInfo.addr, nil, addr self.swapChainFramebuffers[index]) != VK_SUCCESS:
+        if vkCreateFramebuffer(app.device, framebufferInfo.addr, nil, addr app.swapChainFramebuffers[index]) != VK_SUCCESS:
             quit("failed to create framebuffer")
 
-proc cleanupSwapChain(self: VulkanTutorialApp) =
-    for framebuffer in self.swapChainFramebuffers:
-        vkDestroyFramebuffer(self.device, framebuffer, nil)
-    for imageView in self.swapChainImageViews:
-        vkDestroyImageView(self.device, imageView, nil)
-    vkDestroySwapchainKHR(self.device, self.swapChain, nil)
+proc cleanupSwapChain(app: VulkanTutorialApp) =
+    for framebuffer in app.swapChainFramebuffers:
+        vkDestroyFramebuffer(app.device, framebuffer, nil)
+    for imageView in app.swapChainImageViews:
+        vkDestroyImageView(app.device, imageView, nil)
+    vkDestroySwapchainKHR(app.device, app.swapChain, nil)
 
-proc recreateSwapChain(self: VulkanTutorialApp) =
+proc recreateSwapChain(app: VulkanTutorialApp) =
     var
         width: int32 = 0
         height: int32 = 0
-    getFramebufferSize(self.window, addr width, addr height)
+    getFramebufferSize(app.window, addr width, addr height)
     while width == 0 or height == 0:
-        getFramebufferSize(self.window, addr width, addr height)
+        getFramebufferSize(app.window, addr width, addr height)
         glfwWaitEvents()
-    discard vkDeviceWaitIdle(self.device)
+    discard vkDeviceWaitIdle(app.device)
 
-    self.cleanupSwapChain()
+    app.cleanupSwapChain()
 
-    self.createSwapChain()
-    self.createImageViews()
-    self.createFramebuffers()
+    app.createSwapChain()
+    app.createImageViews()
+    app.createFramebuffers()
 
-proc createCommandPool(self: VulkanTutorialApp) =
+proc createCommandPool(app: VulkanTutorialApp) =
     var
-        indicies: QueueFamilyIndices = self.findQueueFamilies(self.physicalDevice) # I should just save this info. Does it change?
+        indicies: QueueFamilyIndices = app.findQueueFamilies(app.physicalDevice) # I should just save this info. Does it change?
         poolInfo: VkCommandPoolCreateInfo = newVkCommandPoolCreateInfo(
             flags = VkCommandPoolCreateFlags(VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT),
             queueFamilyIndex = indicies.graphicsFamily.get
         )
-    if vkCreateCommandPool(self.device, addr poolInfo, nil, addr self.commandPool) != VK_SUCCESS:
+    if vkCreateCommandPool(app.device, addr poolInfo, nil, addr app.commandPool) != VK_SUCCESS:
         raise newException(RuntimeException, "failed to create command pool!")
 
-proc createCommandBuffers(self: VulkanTutorialApp) =
-    self.commandBuffers.setLen(MAX_FRAMES_IN_FLIGHT)
+proc createCommandBuffers(app: VulkanTutorialApp) =
+    app.commandBuffers.setLen(MAX_FRAMES_IN_FLIGHT)
     var allocInfo: VkCommandBufferAllocateInfo = newVkCommandBufferAllocateInfo(
-        commandPool = self.commandPool,
+        commandPool = app.commandPool,
         level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-        commandBufferCount = cast[uint32](self.commandBuffers.len)
+        commandBufferCount = cast[uint32](app.commandBuffers.len)
     )
-    if vkAllocateCommandBuffers(self.device, addr allocInfo, addr self.commandBuffers[0]) != VK_SUCCESS:
+    if vkAllocateCommandBuffers(app.device, addr allocInfo, addr app.commandBuffers[0]) != VK_SUCCESS:
         raise newException(RuntimeException, "failed to allocate command buffers!")
 
-proc recordCommandBuffer(self: VulkanTutorialApp, commandBuffer: VkCommandBuffer, imageIndex: uint32) =
+proc recordCommandBuffer(app: VulkanTutorialApp, commandBuffer: VkCommandBuffer, imageIndex: uint32) =
     var beginInfo: VkCommandBufferBeginInfo = newVkCommandBufferBeginInfo(
         flags = VkCommandBufferUsageFlags(0),
         pInheritanceInfo = nil
@@ -571,29 +571,29 @@ proc recordCommandBuffer(self: VulkanTutorialApp, commandBuffer: VkCommandBuffer
     var
         clearColor: VkClearValue = VkClearValue(color: VkClearColorValue(float32: [0f, 0f, 0f, 1f]))
         renderPassInfo: VkRenderPassBeginInfo = newVkRenderPassBeginInfo(
-            renderPass = self.renderPass,
-            framebuffer = self.swapChainFrameBuffers[imageIndex],
+            renderPass = app.renderPass,
+            framebuffer = app.swapChainFrameBuffers[imageIndex],
             renderArea = VkRect2D(
                 offset: VkOffset2d(x: 0,y: 0),
-                extent: self.swapChainExtent
+                extent: app.swapChainExtent
             ),
             clearValueCount = 1,
             pClearValues = addr clearColor
         )
     vkCmdBeginRenderPass(commandBuffer, renderPassInfo.addr, VK_SUBPASS_CONTENTS_INLINE)
-    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, self.graphicsPipeline)
+    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, app.graphicsPipeline)
     var
         viewport: VkViewport = newVkViewport(
             x = 0f,
             y = 0f,
-            width = self.swapChainExtent.width.float32,
-            height = self.swapChainExtent.height.float32,
+            width = app.swapChainExtent.width.float32,
+            height = app.swapChainExtent.height.float32,
             minDepth = 0f,
             maxDepth = 1f
         )
         scissor: VkRect2D = newVkRect2D(
             offset = VkOffset2D(x: 0, y: 0),
-            extent = self.swapChainExtent
+            extent = app.swapChainExtent
         )
     vkCmdSetViewport(commandBuffer, 0, 1, addr viewport)
     vkCmdSetScissor(commandBuffer, 0, 1, addr scissor)
@@ -602,53 +602,53 @@ proc recordCommandBuffer(self: VulkanTutorialApp, commandBuffer: VkCommandBuffer
     if vkEndCommandBuffer(commandBuffer) != VK_SUCCESS:
         quit("failed to record command buffer")
 
-proc createSyncObjects(self: VulkanTutorialApp) =
-    self.imageAvailableSemaphores.setLen(MAX_FRAMES_IN_FLIGHT)
-    self.renderFinishedSemaphores.setLen(MAX_FRAMES_IN_FLIGHT)
-    self.inFlightFences.setLen(MAX_FRAMES_IN_FLIGHT)
+proc createSyncObjects(app: VulkanTutorialApp) =
+    app.imageAvailableSemaphores.setLen(MAX_FRAMES_IN_FLIGHT)
+    app.renderFinishedSemaphores.setLen(MAX_FRAMES_IN_FLIGHT)
+    app.inFlightFences.setLen(MAX_FRAMES_IN_FLIGHT)
     var
         semaphoreInfo: VkSemaphoreCreateInfo = newVkSemaphoreCreateInfo()
         fenceInfo: VkFenceCreateInfo = newVkFenceCreateInfo(
             flags = VkFenceCreateFlags(VK_FENCE_CREATE_SIGNALED_BIT)
         )
     for i in countup(0,cast[int](MAX_FRAMES_IN_FLIGHT-1)):
-        if  (vkCreateSemaphore(self.device, addr semaphoreInfo, nil, addr self.imageAvailableSemaphores[i]) != VK_SUCCESS) or 
-            (vkCreateSemaphore(self.device, addr semaphoreInfo, nil, addr self.renderFinishedSemaphores[i]) != VK_SUCCESS) or 
-            (vkCreateFence(self.device, addr fenceInfo, nil, addr self.inFlightFences[i]) != VK_SUCCESS):
+        if  (vkCreateSemaphore(app.device, addr semaphoreInfo, nil, addr app.imageAvailableSemaphores[i]) != VK_SUCCESS) or 
+            (vkCreateSemaphore(app.device, addr semaphoreInfo, nil, addr app.renderFinishedSemaphores[i]) != VK_SUCCESS) or 
+            (vkCreateFence(app.device, addr fenceInfo, nil, addr app.inFlightFences[i]) != VK_SUCCESS):
                 raise newException(RuntimeException, "failed to create sync Objects!")
 
-proc drawFrame(self: VulkanTutorialApp) =
-    discard vkWaitForFences(self.device, 1, addr self.inFlightFences[self.currentFrame], VkBool32(VK_TRUE), uint64.high)
+proc drawFrame(app: VulkanTutorialApp) =
+    discard vkWaitForFences(app.device, 1, addr app.inFlightFences[app.currentFrame], VkBool32(VK_TRUE), uint64.high)
     var imageIndex: uint32
-    let imageResult: VkResult = vkAcquireNextImageKHR(self.device, self.swapChain, uint64.high, self.imageAvailableSemaphores[self.currentFrame], VkFence(0), addr imageIndex)
+    let imageResult: VkResult = vkAcquireNextImageKHR(app.device, app.swapChain, uint64.high, app.imageAvailableSemaphores[app.currentFrame], VkFence(0), addr imageIndex)
     if imageResult == VK_ERROR_OUT_OF_DATE_KHR:
-        self.recreateSwapChain();
+        app.recreateSwapChain();
         return
     elif (imageResult != VK_SUCCESS and imageResult != VK_SUBOPTIMAL_KHR):
         raise newException(RuntimeException, "failed to acquire swap chain image!")
 
     # Only reset the fence if we are submitting work
-    discard vkResetFences(self.device, 1 , addr self.inFlightFences[self.currentFrame])
+    discard vkResetFences(app.device, 1 , addr app.inFlightFences[app.currentFrame])
 
-    discard vkResetCommandBuffer(self.commandBuffers[self.currentFrame], VkCommandBufferResetFlags(0))
-    self.recordCommandBuffer(self.commandBuffers[self.currentFrame], imageIndex)
+    discard vkResetCommandBuffer(app.commandBuffers[app.currentFrame], VkCommandBufferResetFlags(0))
+    app.recordCommandBuffer(app.commandBuffers[app.currentFrame], imageIndex)
     var
-        waitSemaphores: array[1, VkSemaphore] = [self.imageAvailableSemaphores[self.currentFrame]]
+        waitSemaphores: array[1, VkSemaphore] = [app.imageAvailableSemaphores[app.currentFrame]]
         waitStages: array[1, VkPipelineStageFlags] = [VkPipelineStageFlags(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT)]
-        signalSemaphores: array[1, VkSemaphore] = [self.renderFinishedSemaphores[self.currentFrame]]
+        signalSemaphores: array[1, VkSemaphore] = [app.renderFinishedSemaphores[app.currentFrame]]
         submitInfo: VkSubmitInfo = newVkSubmitInfo(
             waitSemaphoreCount = waitSemaphores.len.uint32,
             pWaitSemaphores = addr waitSemaphores[0],
             pWaitDstStageMask = addr waitStages[0],
             commandBufferCount = 1,
-            pCommandBuffers = addr self.commandBuffers[self.currentFrame],
+            pCommandBuffers = addr app.commandBuffers[app.currentFrame],
             signalSemaphoreCount = 1,
             pSignalSemaphores = addr signalSemaphores[0]
         )
-    if vkQueueSubmit(self.graphicsQueue, 1, addr submitInfo, self.inFlightFences[self.currentFrame]) != VK_SUCCESS:
+    if vkQueueSubmit(app.graphicsQueue, 1, addr submitInfo, app.inFlightFences[app.currentFrame]) != VK_SUCCESS:
         raise newException(RuntimeException, "failed to submit draw command buffer")
     var
-        swapChains: array[1, VkSwapchainKHR] = [self.swapChain]
+        swapChains: array[1, VkSwapchainKHR] = [app.swapChain]
         presentInfo: VkPresentInfoKHR = newVkPresentInfoKHR(
             waitSemaphoreCount = 1,
             pWaitSemaphores = addr signalSemaphores[0],
@@ -657,55 +657,55 @@ proc drawFrame(self: VulkanTutorialApp) =
             pImageIndices = addr imageIndex,
             pResults = nil
         )
-    let queueResult = vkQueuePresentKHR(self.presentQueue, addr presentInfo)
-    if queueResult == VK_ERROR_OUT_OF_DATE_KHR or queueResult == VK_SUBOPTIMAL_KHR or self.framebufferResized:
-        self.framebufferResized = false
-        self.recreateSwapChain();
+    let queueResult = vkQueuePresentKHR(app.presentQueue, addr presentInfo)
+    if queueResult == VK_ERROR_OUT_OF_DATE_KHR or queueResult == VK_SUBOPTIMAL_KHR or app.framebufferResized:
+        app.framebufferResized = false
+        app.recreateSwapChain();
     elif queueResult != VK_SUCCESS:
         raise newException(RuntimeException, "failed to present swap chain image!")
-    self.currentFrame = (self.currentFrame + 1).mod(MAX_FRAMES_IN_FLIGHT)
+    app.currentFrame = (app.currentFrame + 1).mod(MAX_FRAMES_IN_FLIGHT)
 
 
-proc initVulkan(self: VulkanTutorialApp) =
-    self.createInstance()
-    self.createSurface()
-    self.pickPhysicalDevice()
-    self.createLogicalDevice()
-    self.createSwapChain()
-    self.createImageViews()
-    self.createRenderPass()
-    self.createGraphicsPipeline()
-    self.createFrameBuffers()
-    self.createCommandPool()
-    self.createCommandBuffers()
-    self.createSyncObjects()
-    self.framebufferResized = false
-    self.currentFrame = 0
+proc initVulkan(app: VulkanTutorialApp) =
+    app.createInstance()
+    app.createSurface()
+    app.pickPhysicalDevice()
+    app.createLogicalDevice()
+    app.createSwapChain()
+    app.createImageViews()
+    app.createRenderPass()
+    app.createGraphicsPipeline()
+    app.createFrameBuffers()
+    app.createCommandPool()
+    app.createCommandBuffers()
+    app.createSyncObjects()
+    app.framebufferResized = false
+    app.currentFrame = 0
 
-proc mainLoop(self: VulkanTutorialApp) =
-    while not windowShouldClose(self.window):
+proc mainLoop(app: VulkanTutorialApp) =
+    while not windowShouldClose(app.window):
         glfwPollEvents()
-        self.drawFrame()
-    discard vkDeviceWaitIdle(self.device);
+        app.drawFrame()
+    discard vkDeviceWaitIdle(app.device);
 
-proc cleanup(self: VulkanTutorialApp) =
+proc cleanup(app: VulkanTutorialApp) =
     for i in countup(0,cast[int](MAX_FRAMES_IN_FLIGHT-1)):
-        vkDestroySemaphore(self.device, self.imageAvailableSemaphores[i], nil)
-        vkDestroySemaphore(self.device, self.renderFinishedSemaphores[i], nil)
-        vkDestroyFence(self.device, self.inFlightFences[i], nil)
-    vkDestroyCommandPool(self.device, self.commandPool, nil)
-    vkDestroyPipeline(self.device, self.graphicsPipeline, nil)
-    vkDestroyPipelineLayout(self.device, self.pipelineLayout, nil)
-    vkDestroyRenderPass(self.device, self.renderPass, nil)
-    self.cleanupSwapChain()
-    vkDestroyDevice(self.device, nil) #destroy device before instance
-    vkDestroySurfaceKHR(self.instance, self.surface, nil)
-    vkDestroyInstance(self.instance, nil)
-    self.window.destroyWindow()
+        vkDestroySemaphore(app.device, app.imageAvailableSemaphores[i], nil)
+        vkDestroySemaphore(app.device, app.renderFinishedSemaphores[i], nil)
+        vkDestroyFence(app.device, app.inFlightFences[i], nil)
+    vkDestroyCommandPool(app.device, app.commandPool, nil)
+    vkDestroyPipeline(app.device, app.graphicsPipeline, nil)
+    vkDestroyPipelineLayout(app.device, app.pipelineLayout, nil)
+    vkDestroyRenderPass(app.device, app.renderPass, nil)
+    app.cleanupSwapChain()
+    vkDestroyDevice(app.device, nil) #destroy device before instance
+    vkDestroySurfaceKHR(app.instance, app.surface, nil)
+    vkDestroyInstance(app.instance, nil)
+    app.window.destroyWindow()
     glfwTerminate()
 
-proc run*(self: VulkanTutorialApp) =
-    self.initWindow()
-    self.initVulkan()
-    self.mainLoop()
-    self.cleanup()
+proc run*(app: VulkanTutorialApp) =
+    app.initWindow()
+    app.initVulkan()
+    app.mainLoop()
+    app.cleanup()
