@@ -14,6 +14,7 @@ bin           = @["nimVulkanTutorial"]
 
 requires "https://github.com/DanielBelmes/glfw#head"
 requires "https://github.com/DanielBelmes/vulkan#head"
+requires "vmath"
 
 before build:
   exec("glslc src/shaders/shader.vert -o src/shaders/vert.spv")
