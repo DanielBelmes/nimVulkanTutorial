@@ -4,9 +4,10 @@ import glfw
 import sets
 import bitops
 import vulkan
+import vmath
 from errors import RuntimeException
 import types
-from utils import cStringToString
+import utils
 
 const
     validationLayers = ["VK_LAYER_KHRONOS_validation"]
@@ -21,12 +22,43 @@ when not defined(release):
 else:
     const enableValidationLayers = false
 
+let vertices: seq[Vertex] = @[
+    vertex(vec2(0.0, -0.5),vec3(1.0, 0.0, 0.0)),
+    vertex(vec2(0.5, 0.5),vec3(0.0, 1.0, 0.0)),
+    vertex(vec2(-0.5, 0.5),vec3(0.0, 0.0, 1.0))
+]
+
+proc getBindingDescription(vertex: typedesc[Vertex]) : VkVertexInputBindingDescription =
+    newVkVertexInputBindingDescription(
+        binding = 0,
+        stride = sizeof(Vertex).uint32,
+        inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
+    )
+
+proc getAttributeDescriptions(vertex: typedesc[Vertex]) : array[2, VkVertexInputAttributeDescription] =
+    var attributeDescriptions: array[2,VkVertexInputAttributeDescription] = [
+        newVkVertexInputAttributeDescription(
+            binding = 0,
+            location = 0,
+            format = VK_FORMAT_R32G32_SFLOAT,
+            offset = offsetOf(Vertex, pos).uint32
+        ),
+        newVkVertexInputAttributeDescription(
+            binding = 0,
+            location = 1,
+            format = VK_FORMAT_R32G32B32_SFLOAT,
+            offset = offsetOf(Vertex, color).uint32
+        )
+    ]
+    result = attributeDescriptions
+
 type
     VulkanTutorialApp* = ref object
         instance: VkInstance
         window: GLFWWindow
         surface: VkSurfaceKHR
         physicalDevice: VkPhysicalDevice
+        deviceProperties: VkPhysicalDeviceProperties
         graphicsQueue: VkQueue
         presentQueue: VkQueue
         device: VkDevice
@@ -40,6 +72,8 @@ type
         graphicsPipeline: VkPipeline
         swapChainFramebuffers: seq[VkFramebuffer]
         commandPool: VkCommandPool
+        vertexBuffer: VkBuffer
+        vertexBufferMemory: VkDeviceMemory
         commandBuffers: seq[VkCommandBuffer]
         imageAvailableSemaphores: seq[VkSemaphore]
         renderFinishedSemaphores: seq[VkSemaphore]
@@ -205,8 +239,6 @@ proc findQueueFamilies(app: VulkanTutorialApp, pDevice: VkPhysicalDevice): Queue
         index.inc
 
 proc isDeviceSuitable(app: VulkanTutorialApp, pDevice: VkPhysicalDevice): bool =
-    var deviceProperties: VkPhysicalDeviceProperties
-    vkGetPhysicalDeviceProperties(pDevice, deviceProperties.addr)
     var indicies: QueueFamilyIndices = app.findQueueFamilies(pDevice)
     var extensionsSupported = app.checkDeviceExtensionSupport(pDevice)
     var swapChainAdequate = false
@@ -225,6 +257,7 @@ proc pickPhysicalDevice(app: VulkanTutorialApp) =
     for pDevice in pDevices:
         if app.isDeviceSuitable(pDevice):
             app.physicalDevice = pDevice
+            vkGetPhysicalDeviceProperties(app.physicalDevice, app.deviceProperties.addr)
             return
 
     raise newException(RuntimeException, "failed to find a suitable GPU!")
@@ -261,11 +294,11 @@ proc createLogicalDevice(app: VulkanTutorialApp) =
     if vkCreateDevice(app.physicalDevice, deviceCreateInfo.addr, nil, app.device.addr) != VKSuccess:
         echo "failed to create logical device"
 
-    if not deviceExts.isNil:
-        deallocCStringArray(deviceExts)
-
     vkGetDeviceQueue(app.device, indices.graphicsFamily.get, 0, addr app.graphicsQueue)
     vkGetDeviceQueue(app.device, indices.presentFamily.get, 0, addr app.presentQueue)
+
+    if not deviceExts.isNil:
+        deallocCStringArray(deviceExts)
 
 
 proc createSwapChain(app: VulkanTutorialApp) =
@@ -401,11 +434,13 @@ proc createGraphicsPipeline(app: VulkanTutorialApp) =
             dynamicStateCount = dynamicStates.len.uint32,
             pDynamicStates = addr dynamicStates[0]
         )
+        bindingDescription = Vertex.getBindingDescription()
+        attributeDescriptions = Vertex.getAttributeDescriptions()
         vertexInputInfo: VkPipelineVertexInputStateCreateInfo = newVkPipelineVertexInputStateCreateInfo(
-            vertexBindingDescriptionCount = 0,
-            pVertexBindingDescriptions = nil,
-            vertexAttributeDescriptionCount = 0,
-            pVertexAttributeDescriptions = nil
+            vertexBindingDescriptionCount = 1,
+            pVertexBindingDescriptions = addr bindingDescription,
+            vertexAttributeDescriptionCount = cast[uint32](attributeDescriptions.len),
+            pVertexAttributeDescriptions = addr attributeDescriptions[0]
         )
         inputAssembly: VkPipelineInputAssemblyStateCreateInfo = newVkPipelineInputAssemblyStateCreateInfo(
             topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
@@ -550,9 +585,57 @@ proc createCommandPool(app: VulkanTutorialApp) =
     if vkCreateCommandPool(app.device, addr poolInfo, nil, addr app.commandPool) != VK_SUCCESS:
         raise newException(RuntimeException, "failed to create command pool!")
 
+proc findMemoryType(app: VulkanTutorialApp, typeFilter: uint32, properties: VkMemoryPropertyFlags) : uint32 =
+    var memProperties: VkPhysicalDeviceMemoryProperties
+    vkGetPhysicalDeviceMemoryProperties(app.physicalDevice, addr memProperties);
+    for i in 0..<memProperties.memoryTypeCount:
+        if (typeFilter and (1 shl i).uint32).bool and (memProperties.memoryTypes[i].propertyFlags.uint32 and properties.uint32) == properties.uint32:
+            return i
+    raise newException(RuntimeException, "failed to find suitable memory type!")
+
+
+proc createVertexBuffer(app: VulkanTutorialApp) =
+    let
+        bufferInfo: VkBufferCreateInfo = VkBufferCreateInfo(
+            sType: VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+            size: (sizeof(vertices[0]) * vertices.len).VkDeviceSize,
+            usage: VK_BUFFER_USAGE_VERTEX_BUFFER_BIT.VkBufferUsageFlags,
+            sharingMode: VK_SHARING_MODE_EXCLUSIVE
+        )
+
+    if vkCreateBuffer(app.device, addr bufferInfo, nil, addr app.vertexBuffer) != VK_SUCCESS:
+        raise newException(RuntimeException, "failed to create vertex buffer!")
+    var memRequirements: VkMemoryRequirements
+    vkGetBufferMemoryRequirements(app.device, app.vertexBuffer, addr memRequirements)
+
+    let allocInfo: VkMemoryAllocateInfo = newVkMemoryAllocateInfo(
+        allocationSize = memRequirements.size,
+        memoryTypeIndex = app.findMemoryType(memRequirements.memoryTypeBits.uint32, (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT or VK_MEMORY_PROPERTY_HOST_COHERENT_BIT).VkMemoryPropertyFlags)
+    )
+
+    if vkAllocateMemory(app.device, addr allocInfo, nil, addr app.vertexBufferMemory) != VK_SUCCESS:
+        raise newException(RuntimeException, "failed to allocate vertex buffer memory!");
+
+    if vkBindBufferMemory(app.device, app.vertexBuffer, app.vertexBufferMemory, 0.VkDeviceSize) != VK_SUCCESS:
+        raise newException(RuntimeException, "failed to bind buffer memory")
+
+    var data : pointer
+    if vkMapMemory(app.device, app.vertexBufferMemory, 0.VkDeviceSize, bufferInfo.size, 0.VkMemoryMapFlags, addr data) != VK_SUCCESS:
+        raise newException(RuntimeException, "failed to map memory")
+    copyMem(data, addr vertices[0], bufferInfo.size.uint32)
+    let
+        alignedSize : uint32 = (bufferInfo.size.uint32 - 1) - ((bufferInfo.size.uint32 - 1) mod app.deviceProperties.limits.nonCoherentAtomSize.uint32) + app.deviceProperties.limits.nonCoherentAtomSize.uint32
+        vertexRange: VkMappedMemoryRange = newVkMappedMemoryRange(
+            memory = app.vertexBufferMemory,
+            offset = 0.VkDeviceSize,
+            size   = alignedSize.VkDeviceSize
+        )
+    discard vkFlushMappedMemoryRanges(app.device, 1, addr vertexRange)
+    vkUnmapMemory(app.device, app.vertexBufferMemory)
+
 proc createCommandBuffers(app: VulkanTutorialApp) =
     app.commandBuffers.setLen(MAX_FRAMES_IN_FLIGHT)
-    var allocInfo: VkCommandBufferAllocateInfo = newVkCommandBufferAllocateInfo(
+    let allocInfo: VkCommandBufferAllocateInfo = newVkCommandBufferAllocateInfo(
         commandPool = app.commandPool,
         level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
         commandBufferCount = cast[uint32](app.commandBuffers.len)
@@ -561,14 +644,14 @@ proc createCommandBuffers(app: VulkanTutorialApp) =
         raise newException(RuntimeException, "failed to allocate command buffers!")
 
 proc recordCommandBuffer(app: VulkanTutorialApp, commandBuffer: VkCommandBuffer, imageIndex: uint32) =
-    var beginInfo: VkCommandBufferBeginInfo = newVkCommandBufferBeginInfo(
+    let beginInfo: VkCommandBufferBeginInfo = newVkCommandBufferBeginInfo(
         flags = VkCommandBufferUsageFlags(0),
         pInheritanceInfo = nil
     )
-    if vkBeginCOmmandBuffer(commandBuffer, addr beginInfo) != VK_SUCCESS:
+    if vkBeginCommandBuffer(commandBuffer, addr beginInfo) != VK_SUCCESS:
         raise newException(RuntimeException, "failed to begin recording command buffer!")
 
-    var
+    let
         clearColor: VkClearValue = VkClearValue(color: VkClearColorValue(float32: [0f, 0f, 0f, 1f]))
         renderPassInfo: VkRenderPassBeginInfo = newVkRenderPassBeginInfo(
             renderPass = app.renderPass,
@@ -582,7 +665,7 @@ proc recordCommandBuffer(app: VulkanTutorialApp, commandBuffer: VkCommandBuffer,
         )
     vkCmdBeginRenderPass(commandBuffer, renderPassInfo.addr, VK_SUBPASS_CONTENTS_INLINE)
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, app.graphicsPipeline)
-    var
+    let
         viewport: VkViewport = newVkViewport(
             x = 0f,
             y = 0f,
@@ -595,9 +678,12 @@ proc recordCommandBuffer(app: VulkanTutorialApp, commandBuffer: VkCommandBuffer,
             offset = VkOffset2D(x: 0, y: 0),
             extent = app.swapChainExtent
         )
+        vertexBuffers: array[1, VkBuffer] = [app.vertexBuffer]
+        offsets: array[1, VkDeviceSize] = [0.VkDeviceSize]
     vkCmdSetViewport(commandBuffer, 0, 1, addr viewport)
     vkCmdSetScissor(commandBuffer, 0, 1, addr scissor)
-    vkCmdDraw(commandBuffer, 3, 1, 0, 0)
+    vkCmdBindVertexBuffers(commandBuffer, 0, 1, addr vertexBuffers[0], addr offsets[0])
+    vkCmdDraw(commandBuffer, vertices.len.uint32, 1, 0, 0)
     vkCmdEndRenderPass(commandBuffer)
     if vkEndCommandBuffer(commandBuffer) != VK_SUCCESS:
         quit("failed to record command buffer")
@@ -606,7 +692,7 @@ proc createSyncObjects(app: VulkanTutorialApp) =
     app.imageAvailableSemaphores.setLen(MAX_FRAMES_IN_FLIGHT)
     app.renderFinishedSemaphores.setLen(MAX_FRAMES_IN_FLIGHT)
     app.inFlightFences.setLen(MAX_FRAMES_IN_FLIGHT)
-    var
+    let
         semaphoreInfo: VkSemaphoreCreateInfo = newVkSemaphoreCreateInfo()
         fenceInfo: VkFenceCreateInfo = newVkFenceCreateInfo(
             flags = VkFenceCreateFlags(VK_FENCE_CREATE_SIGNALED_BIT)
@@ -632,7 +718,7 @@ proc drawFrame(app: VulkanTutorialApp) =
 
     discard vkResetCommandBuffer(app.commandBuffers[app.currentFrame], VkCommandBufferResetFlags(0))
     app.recordCommandBuffer(app.commandBuffers[app.currentFrame], imageIndex)
-    var
+    let
         waitSemaphores: array[1, VkSemaphore] = [app.imageAvailableSemaphores[app.currentFrame]]
         waitStages: array[1, VkPipelineStageFlags] = [VkPipelineStageFlags(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT)]
         signalSemaphores: array[1, VkSemaphore] = [app.renderFinishedSemaphores[app.currentFrame]]
@@ -647,7 +733,7 @@ proc drawFrame(app: VulkanTutorialApp) =
         )
     if vkQueueSubmit(app.graphicsQueue, 1, addr submitInfo, app.inFlightFences[app.currentFrame]) != VK_SUCCESS:
         raise newException(RuntimeException, "failed to submit draw command buffer")
-    var
+    let
         swapChains: array[1, VkSwapchainKHR] = [app.swapChain]
         presentInfo: VkPresentInfoKHR = newVkPresentInfoKHR(
             waitSemaphoreCount = 1,
@@ -665,7 +751,6 @@ proc drawFrame(app: VulkanTutorialApp) =
         raise newException(RuntimeException, "failed to present swap chain image!")
     app.currentFrame = (app.currentFrame + 1).mod(MAX_FRAMES_IN_FLIGHT)
 
-
 proc initVulkan(app: VulkanTutorialApp) =
     app.createInstance()
     app.createSurface()
@@ -677,6 +762,7 @@ proc initVulkan(app: VulkanTutorialApp) =
     app.createGraphicsPipeline()
     app.createFrameBuffers()
     app.createCommandPool()
+    app.createVertexBuffer()
     app.createCommandBuffers()
     app.createSyncObjects()
     app.framebufferResized = false
@@ -698,6 +784,8 @@ proc cleanup(app: VulkanTutorialApp) =
     vkDestroyPipelineLayout(app.device, app.pipelineLayout, nil)
     vkDestroyRenderPass(app.device, app.renderPass, nil)
     app.cleanupSwapChain()
+    vkDestroyBuffer(app.device, app.vertexBuffer, nil);
+    vkFreeMemory(app.device, app.vertexBufferMemory, nil);
     vkDestroyDevice(app.device, nil) #destroy device before instance
     vkDestroySurfaceKHR(app.instance, app.surface, nil)
     vkDestroyInstance(app.instance, nil)
