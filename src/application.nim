@@ -22,11 +22,17 @@ when not defined(release):
 else:
     const enableValidationLayers = false
 
-let vertices: seq[Vertex] = @[
-    vertex(vec2(0.0, -0.5),vec3(1.0, 0.0, 0.0)),
-    vertex(vec2(0.5, 0.5),vec3(0.0, 1.0, 0.0)),
-    vertex(vec2(-0.5, 0.5),vec3(0.0, 0.0, 1.0))
-]
+let
+    vertices: seq[Vertex] = @[
+        vertex(vec2(-0.5, -0.5),vec3(1.0, 0.0, 0.0)),
+        vertex(vec2(0.5, -0.5),vec3(0.0,1.0,0.0)),
+        vertex(vec2(0.5, 0.5),vec3(0.0, 0.0, 1.0)),
+        vertex(vec2(-0.5, 0.5),vec3(1.0, 1.0, 1.0))
+    ]
+    sceneIndices: seq[uint16] = @[
+        0,1,2,2,3,0
+    ]
+
 
 proc getBindingDescription(vertex: typedesc[Vertex]) : VkVertexInputBindingDescription =
     newVkVertexInputBindingDescription(
@@ -74,6 +80,8 @@ type
         commandPool: VkCommandPool
         vertexBuffer: VkBuffer
         vertexBufferMemory: VkDeviceMemory
+        indexBuffer: VkBuffer # [TODO] combine vertex and indexBuffer and use offset
+        indexBufferMemory: VkDeviceMemory
         commandBuffers: seq[VkCommandBuffer]
         imageAvailableSemaphores: seq[VkSemaphore]
         renderFinishedSemaphores: seq[VkSemaphore]
@@ -239,13 +247,13 @@ proc findQueueFamilies(app: VulkanTutorialApp, pDevice: VkPhysicalDevice): Queue
         index.inc
 
 proc isDeviceSuitable(app: VulkanTutorialApp, pDevice: VkPhysicalDevice): bool =
-    var indicies: QueueFamilyIndices = app.findQueueFamilies(pDevice)
+    var indices: QueueFamilyIndices = app.findQueueFamilies(pDevice)
     var extensionsSupported = app.checkDeviceExtensionSupport(pDevice)
     var swapChainAdequate = false
     if extensionsSupported:
         var swapChainSupport: SwapChainSupportDetails = app.querySwapChainSupport(pDevice)
         swapChainAdequate = swapChainSupport.formats.len != 0 and swapChainSupport.presentModes.len != 0
-    return indicies.isComplete and extensionsSupported and swapChainAdequate
+    return indices.isComplete and extensionsSupported and swapChainAdequate
 
 proc pickPhysicalDevice(app: VulkanTutorialApp) =
     var deviceCount: uint32 = 0
@@ -329,12 +337,12 @@ proc createSwapChain(app: VulkanTutorialApp) =
         oldSwapchain: VkSwapchainKHR(VK_NULL_HANDLE)
     )
     let indices = app.findQueueFamilies(app.physicalDevice)
-    var queueFamilyIndicies = [indices.graphicsFamily.get, indices.presentFamily.get]
+    var queueFamilyindices = [indices.graphicsFamily.get, indices.presentFamily.get]
 
     if indices.graphicsFamily.get != indices.presentFamily.get:
         createInfo.imageSharingMode = VK_SHARING_MODE_CONCURRENT
         createInfo.queueFamilyIndexCount = 2
-        createInfo.pQueueFamilyIndices = queueFamilyIndicies[0].addr
+        createInfo.pQueueFamilyIndices = queueFamilyindices[0].addr
     else:
         createInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE
         createInfo.queueFamilyIndexCount = 0
@@ -577,10 +585,10 @@ proc recreateSwapChain(app: VulkanTutorialApp) =
 
 proc createCommandPool(app: VulkanTutorialApp) =
     var
-        indicies: QueueFamilyIndices = app.findQueueFamilies(app.physicalDevice) # I should just save this info. Does it change?
+        indices: QueueFamilyIndices = app.findQueueFamilies(app.physicalDevice) # I should just save this info. Does it change?
         poolInfo: VkCommandPoolCreateInfo = newVkCommandPoolCreateInfo(
             flags = VkCommandPoolCreateFlags(VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT),
-            queueFamilyIndex = indicies.graphicsFamily.get
+            queueFamilyIndex = indices.graphicsFamily.get
         )
     if vkCreateCommandPool(app.device, addr poolInfo, nil, addr app.commandPool) != VK_SUCCESS:
         raise newException(RuntimeException, "failed to create command pool!")
@@ -678,6 +686,33 @@ proc createVertexBuffer(app: VulkanTutorialApp) =
     vkDestroyBuffer(app.device, stagingBuffer, nil)
     vkFreeMemory(app.device, stagingBufferMemory, nil)
 
+proc createIndexBuffer(app: VulkanTutorialApp) =
+    let bufferSize : uint32 = (sizeof(sceneIndices[0]) * sceneIndices.len).uint32
+    var
+        stagingBuffer: VkBuffer
+        stagingBufferMemory: VkDeviceMemory
+
+    app.createBuffer(bufferSize.VkDeviceSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT or VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory)
+
+    var data : pointer
+    if vkMapMemory(app.device, stagingBufferMemory, 0.VkDeviceSize, bufferSize.VkDeviceSize, 0.VkMemoryMapFlags, addr data) != VK_SUCCESS:
+        raise newException(RuntimeException, "failed to map memory")
+    copyMem(data, addr sceneIndices[0], bufferSize)
+    let
+        alignedSize : uint32 = (bufferSize - 1) - ((bufferSize - 1) mod app.deviceProperties.limits.nonCoherentAtomSize.uint32) + app.deviceProperties.limits.nonCoherentAtomSize.uint32
+        indexRange: VkMappedMemoryRange = newVkMappedMemoryRange(
+            memory = stagingBufferMemory,
+            offset = 0.VkDeviceSize,
+            size   = alignedSize.VkDeviceSize
+        )
+    discard vkFlushMappedMemoryRanges(app.device, 1, addr indexRange)
+    vkUnmapMemory(app.device, stagingBufferMemory)
+
+    app.createBuffer(bufferSize.VkDeviceSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT or VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, app.indexBuffer, app.indexBufferMemory)
+    app.copyBuffer(stagingBuffer, app.indexBuffer, bufferSize.VkDeviceSize)
+    vkDestroyBuffer(app.device, stagingBuffer, nil)
+    vkFreeMemory(app.device, stagingBufferMemory, nil)
+
 proc createCommandBuffers(app: VulkanTutorialApp) =
     app.commandBuffers.setLen(MAX_FRAMES_IN_FLIGHT)
     let allocInfo: VkCommandBufferAllocateInfo = newVkCommandBufferAllocateInfo(
@@ -728,7 +763,8 @@ proc recordCommandBuffer(app: VulkanTutorialApp, commandBuffer: var VkCommandBuf
     vkCmdSetViewport(commandBuffer, 0, 1, addr viewport)
     vkCmdSetScissor(commandBuffer, 0, 1, addr scissor)
     vkCmdBindVertexBuffers(commandBuffer, 0, 1, addr vertexBuffers[0], addr offsets[0])
-    vkCmdDraw(commandBuffer, vertices.len.uint32, 1, 0, 0)
+    vkCmdBindIndexBuffer(commandBuffer, app.indexBuffer, 0.VkDeviceSize, VK_INDEX_TYPE_UINT16) # possible types are VK_INDEX_TYPE_UINT16 and VK_INDEX_TYPE_UINT32
+    vkCmdDrawIndexed(commandBuffer, sceneIndices.len.uint32, 1, 0, 0, 0)
     vkCmdEndRenderPass(commandBuffer)
     if vkEndCommandBuffer(commandBuffer) != VK_SUCCESS:
         quit("failed to record command buffer")
@@ -808,6 +844,7 @@ proc initVulkan(app: VulkanTutorialApp) =
     app.createFrameBuffers()
     app.createCommandPool()
     app.createVertexBuffer()
+    app.createIndexBuffer()
     app.createCommandBuffers()
     app.createSyncObjects()
     app.framebufferResized = false
@@ -829,8 +866,10 @@ proc cleanup(app: VulkanTutorialApp) =
     vkDestroyPipelineLayout(app.device, app.pipelineLayout, nil)
     vkDestroyRenderPass(app.device, app.renderPass, nil)
     app.cleanupSwapChain()
-    vkDestroyBuffer(app.device, app.vertexBuffer, nil);
-    vkFreeMemory(app.device, app.vertexBufferMemory, nil);
+    vkDestroyBuffer(app.device, app.vertexBuffer, nil)
+    vkFreeMemory(app.device, app.vertexBufferMemory, nil)
+    vkDestroyBuffer(app.device, app.indexBuffer, nil);
+    vkFreeMemory(app.device, app.indexBufferMemory, nil);
     vkDestroyDevice(app.device, nil) #destroy device before instance
     vkDestroySurfaceKHR(app.instance, app.surface, nil)
     vkDestroyInstance(app.instance, nil)
