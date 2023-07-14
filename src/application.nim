@@ -593,45 +593,90 @@ proc findMemoryType(app: VulkanTutorialApp, typeFilter: uint32, properties: VkMe
             return i
     raise newException(RuntimeException, "failed to find suitable memory type!")
 
-
-proc createVertexBuffer(app: VulkanTutorialApp) =
+proc createBuffer(app: VulkanTutorialApp, size: VkDeviceSize, usage: VkBufferUsageFlagBits, properties: VkMemoryPropertyFlagBits, buffer: var VkBuffer, bufferMemory: var VkDeviceMemory) =
     let
         bufferInfo: VkBufferCreateInfo = VkBufferCreateInfo(
             sType: VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-            size: (sizeof(vertices[0]) * vertices.len).VkDeviceSize,
-            usage: VK_BUFFER_USAGE_VERTEX_BUFFER_BIT.VkBufferUsageFlags,
+            size: size,
+            usage: usage.VkBufferUsageFlags,
             sharingMode: VK_SHARING_MODE_EXCLUSIVE
         )
 
-    if vkCreateBuffer(app.device, addr bufferInfo, nil, addr app.vertexBuffer) != VK_SUCCESS:
-        raise newException(RuntimeException, "failed to create vertex buffer!")
+    if vkCreateBuffer(app.device, addr bufferInfo, nil, addr buffer) != VK_SUCCESS:
+        raise newException(RuntimeException, "failed to create buffer!")
     var memRequirements: VkMemoryRequirements
-    vkGetBufferMemoryRequirements(app.device, app.vertexBuffer, addr memRequirements)
+    vkGetBufferMemoryRequirements(app.device, buffer, addr memRequirements)
 
     let allocInfo: VkMemoryAllocateInfo = newVkMemoryAllocateInfo(
         allocationSize = memRequirements.size,
-        memoryTypeIndex = app.findMemoryType(memRequirements.memoryTypeBits.uint32, (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT or VK_MEMORY_PROPERTY_HOST_COHERENT_BIT).VkMemoryPropertyFlags)
+        memoryTypeIndex = app.findMemoryType(memRequirements.memoryTypeBits.uint32, properties.VkMemoryPropertyFlags)
     )
 
-    if vkAllocateMemory(app.device, addr allocInfo, nil, addr app.vertexBufferMemory) != VK_SUCCESS:
+    if vkAllocateMemory(app.device, addr allocInfo, nil, addr bufferMemory) != VK_SUCCESS: # There is a max memory allocation limit in vulkan. Should use an allocator either custom or VulkanMemoryAllocator. Should calculate offsets and use a single allocation
         raise newException(RuntimeException, "failed to allocate vertex buffer memory!");
 
-    if vkBindBufferMemory(app.device, app.vertexBuffer, app.vertexBufferMemory, 0.VkDeviceSize) != VK_SUCCESS:
+    if vkBindBufferMemory(app.device, buffer, bufferMemory, 0.VkDeviceSize) != VK_SUCCESS:
         raise newException(RuntimeException, "failed to bind buffer memory")
 
+
+proc copyBuffer(app: VulkanTutorialApp, srcBuffer: VkBuffer, dstBuffer: var VkBuffer, size: VkDeviceSize) =
+    var
+        allocInfo: VkCommandBufferAllocateInfo = newVkCommandBufferAllocateInfo(
+            level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+            commandPool = app.commandPool,
+            commandBufferCount = 1.uint32
+        )
+        commandBuffer: VkCommandBuffer
+    if vkAllocateCommandBuffers(app.device, addr allocInfo, addr commandBuffer) != VK_SUCCESS:
+            raise newException(RuntimeException, "failed to allocate commandBuffer for copy buffer action")
+
+    let beginInfo: VkCommandBufferBeginInfo = newVkCommandBufferBeginInfo(
+            flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT.VkCommandBufferUsageFlags,
+            pInheritanceInfo = nil
+        )
+    discard vkBeginCommandBuffer(commandBuffer, addr beginInfo)
+
+    let copyRegion: VkBufferCopy = newVkBufferCopy(
+        srcOffset = 0.VkDeviceSize,
+        dstOffset = 0.VkDeviceSize,
+        size = size
+    )
+    vkCmdCopyBuffer(commandBuffer, srcBuffer, dstBuffer, 1, addr copyRegion)
+    discard vkEndCommandBuffer(commandBuffer)
+    let submitInfo: VkSubmitInfo = VkSubmitInfo(
+        commandBufferCount: 1,
+        pCommandBuffers: addr commandBuffer
+    )
+    discard vkQueueSubmit(app.graphicsQueue, 1.uint32, addr submitInfo, VK_NULL_HANDLE.VkFence)
+    discard vkQueueWaitIdle(app.graphicsQueue)
+    vkFreeCommandBuffers(app.device, app.commandPool, 1, addr commandBuffer)
+
+proc createVertexBuffer(app: VulkanTutorialApp) =
+    let bufferSize : uint32 = (sizeof(vertices[0]) * vertices.len).uint32
+    var
+        stagingBuffer: VkBuffer
+        stagingBufferMemory: VkDeviceMemory
+
+    app.createBuffer(bufferSize.VkDeviceSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT or VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory)
+
     var data : pointer
-    if vkMapMemory(app.device, app.vertexBufferMemory, 0.VkDeviceSize, bufferInfo.size, 0.VkMemoryMapFlags, addr data) != VK_SUCCESS:
+    if vkMapMemory(app.device, stagingBufferMemory, 0.VkDeviceSize, bufferSize.VkDeviceSize, 0.VkMemoryMapFlags, addr data) != VK_SUCCESS:
         raise newException(RuntimeException, "failed to map memory")
-    copyMem(data, addr vertices[0], bufferInfo.size.uint32)
+    copyMem(data, addr vertices[0], bufferSize)
     let
-        alignedSize : uint32 = (bufferInfo.size.uint32 - 1) - ((bufferInfo.size.uint32 - 1) mod app.deviceProperties.limits.nonCoherentAtomSize.uint32) + app.deviceProperties.limits.nonCoherentAtomSize.uint32
+        alignedSize : uint32 = (bufferSize - 1) - ((bufferSize - 1) mod app.deviceProperties.limits.nonCoherentAtomSize.uint32) + app.deviceProperties.limits.nonCoherentAtomSize.uint32
         vertexRange: VkMappedMemoryRange = newVkMappedMemoryRange(
-            memory = app.vertexBufferMemory,
+            memory = stagingBufferMemory,
             offset = 0.VkDeviceSize,
             size   = alignedSize.VkDeviceSize
         )
     discard vkFlushMappedMemoryRanges(app.device, 1, addr vertexRange)
-    vkUnmapMemory(app.device, app.vertexBufferMemory)
+    vkUnmapMemory(app.device, stagingBufferMemory)
+
+    app.createBuffer(bufferSize.VkDeviceSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT or VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, app.vertexBuffer, app.vertexBufferMemory)
+    app.copyBuffer(stagingBuffer, app.vertexBuffer, bufferSize.VkDeviceSize)
+    vkDestroyBuffer(app.device, stagingBuffer, nil)
+    vkFreeMemory(app.device, stagingBufferMemory, nil)
 
 proc createCommandBuffers(app: VulkanTutorialApp) =
     app.commandBuffers.setLen(MAX_FRAMES_IN_FLIGHT)
@@ -643,10 +688,10 @@ proc createCommandBuffers(app: VulkanTutorialApp) =
     if vkAllocateCommandBuffers(app.device, addr allocInfo, addr app.commandBuffers[0]) != VK_SUCCESS:
         raise newException(RuntimeException, "failed to allocate command buffers!")
 
-proc recordCommandBuffer(app: VulkanTutorialApp, commandBuffer: VkCommandBuffer, imageIndex: uint32) =
+proc recordCommandBuffer(app: VulkanTutorialApp, commandBuffer: var VkCommandBuffer, imageIndex: uint32) =
     let beginInfo: VkCommandBufferBeginInfo = newVkCommandBufferBeginInfo(
         flags = VkCommandBufferUsageFlags(0),
-        pInheritanceInfo = nil
+        pInheritanceInfo = nil # [TODO] I should really make this have a default nil value in nimvulkan
     )
     if vkBeginCommandBuffer(commandBuffer, addr beginInfo) != VK_SUCCESS:
         raise newException(RuntimeException, "failed to begin recording command buffer!")
