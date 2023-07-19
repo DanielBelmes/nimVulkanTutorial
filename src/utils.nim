@@ -11,3 +11,17 @@ type
 
 proc vertex*(pos: Vec2, color: Vec3): Vertex =
     result = Vertex(pos : pos, color: color)
+
+type
+    UniformBufferObject* = object
+        model*: Mat4
+        view*: Mat4
+        proj*: Mat4
+
+const vulMat4Y = mat4( # Conversion matrix from OpenGL's Y[0..1] to Vulkan's Y[0..-1]
+    1.0, 0.0,  0.0, 0.0,
+    0.0, -1.0, 0.0, 0.0,
+    0.0, 0.0,  1.0, 0.0,
+    0.0, 0.0,  0.0, 1.0,
+)
+proc toVulY*[T](proj :GMat4[T]) :GMat4[T]=  proj*vulMat4Y

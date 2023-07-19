@@ -8,6 +8,7 @@ import vmath
 from errors import RuntimeException
 import types
 import utils
+import std/monotimes
 
 const
     validationLayers = ["VK_LAYER_KHRONOS_validation"]
@@ -32,6 +33,7 @@ let
     sceneIndices: seq[uint16] = @[
         0,1,2,2,3,0
     ]
+    startTime: int64 = getMonoTime().ticks
 
 
 proc getBindingDescription(vertex: typedesc[Vertex]) : VkVertexInputBindingDescription =
@@ -73,6 +75,7 @@ type
         swapChainImageFormat: VkFormat
         swapChainExtent: VkExtent2D
         swapChainImageViews: seq[VkImageView]
+        descriptorSetLayout: VkDescriptorSetLayout
         pipelineLayout: VkPipelineLayout
         renderPass: VkRenderPass
         graphicsPipeline: VkPipeline
@@ -82,6 +85,11 @@ type
         vertexBufferMemory: VkDeviceMemory
         indexBuffer: VkBuffer # [TODO] combine vertex and indexBuffer and use offset
         indexBufferMemory: VkDeviceMemory
+        uniformBuffers: seq[VkBuffer]
+        uniformBuffersMemory: seq[VkDeviceMemory]
+        uniformBuffersMapped: seq[pointer]
+        descriptorPool: VkDescriptorPool
+        descriptorSets: seq[VkDescriptorSet]
         commandBuffers: seq[VkCommandBuffer]
         imageAvailableSemaphores: seq[VkSemaphore]
         renderFinishedSemaphores: seq[VkSemaphore]
@@ -417,6 +425,23 @@ proc createRenderPass(app: VulkanTutorialApp) =
     if vkCreateRenderPass(app.device, addr renderPassInfo, nil, addr app.renderPass) != VK_SUCCESS:
         quit("failed to create render pass")
 
+proc createDescriptorSetLayout(app: VulkanTutorialApp) =
+    let uboLayoutBinding: VkDescriptorSetLayoutBinding = newVkDescriptorSetLayoutBinding(
+        binding = 0, # same as in vert shader
+        descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+        descriptorCount = 1,
+        stageFlags = VK_SHADER_STAGE_VERTEX_BIT.VkShaderStageFlags,
+        pImmutableSamplers = nil
+    )
+    let
+        layoutInfo: VkDescriptorSetLayoutCreateInfo = newVkDescriptorSetLayoutCreateInfo(
+            bindingCount = 1,
+            pBindings = addr uboLayoutBinding
+        )
+
+    if vkCreateDescriptorSetLayout(app.device, addr layoutInfo, nil, addr app.descriptorSetLayout) != VK_SUCCESS:
+        raise newException(RuntimeException, "failed to create descriptor set layout")
+
 proc createGraphicsPipeline(app: VulkanTutorialApp) =
     const
         vertShaderCode: string = staticRead("./shaders/vert.spv")
@@ -478,7 +503,7 @@ proc createGraphicsPipeline(app: VulkanTutorialApp) =
             polygonMode = VK_POLYGON_MODE_FILL,
             lineWidth = 1.float,
             cullMode = VkCullModeFlags(VK_CULL_MODE_BACK_BIT),
-            frontface = VK_FRONT_FACE_CLOCKWISE,
+            frontface = VK_FRONT_FACE_COUNTER_CLOCKWISE,
             depthBiasEnable = VKBool32(VK_FALSE),
             depthBiasConstantFactor = 0.float,
             depthBiasClamp = 0.float,
@@ -511,8 +536,8 @@ proc createGraphicsPipeline(app: VulkanTutorialApp) =
             blendConstants = [0f, 0f, 0f, 0f], # optional
         )
         pipelineLayoutInfo: VkPipelineLayoutCreateInfo = newVkPipelineLayoutCreateInfo(
-            setLayoutCount = 0, # optional
-            pSetLayouts = nil, # optional
+            setLayoutCount = 1,
+            pSetLayouts = addr app.descriptorSetLayout,
             pushConstantRangeCount = 0, # optional
             pPushConstantRanges = nil, # optional
         )
@@ -713,6 +738,65 @@ proc createIndexBuffer(app: VulkanTutorialApp) =
     vkDestroyBuffer(app.device, stagingBuffer, nil)
     vkFreeMemory(app.device, stagingBufferMemory, nil)
 
+proc createUniformBuffers(app: VulkanTutorialApp) =
+    const bufferSize : uint32 = sizeof(UniformBufferObject).uint32
+
+    app.uniformBuffers = newSeq[VkBuffer](MAX_FRAMES_IN_FLIGHT)
+    app.uniformBuffersMemory = newSeq[VkDeviceMemory](MAX_FRAMES_IN_FLIGHT)
+    app.uniformBuffersMapped = newSeq[pointer](MAX_FRAMES_IN_FLIGHT)
+
+    for i in 0..<MAX_FRAMES_IN_FLIGHT:
+        app.createBuffer(bufferSize.VkDeviceSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT or VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, app.uniformBuffers[i], app.uniformBuffersMemory[i])
+
+        if vkMapMemory(app.device, app.uniformBuffersMemory[i], 0.VkDeviceSize, bufferSize.VkDeviceSize, 0.VkMemoryMapFlags, addr app.uniformBuffersMapped[i]) != VK_SUCCESS:
+            raise newException(RuntimeException, "failed to map memory for " & $i & "uniform buffer")
+
+proc createDescriptorPool(app: VulkanTutorialApp) =
+    let
+        poolSize: VkDescriptorPoolSize = newVkDescriptorPoolSize(
+            `type` = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            descriptorCount = MAX_FRAMES_IN_FLIGHT
+        )
+        poolInfo: VkDescriptorPoolCreateInfo = newVkDescriptorPoolCreateInfo(
+            poolSizeCount = 1,
+            pPoolSizes = addr poolSize,
+            maxSets = MAX_FRAMES_IN_FLIGHT
+        )
+    if vkCreateDescriptorPool(app.device, addr poolInfo, nil, addr app.descriptorPool) != VK_SUCCESS:
+        raise newException(RuntimeException,"failed to create descriptor pool!")
+
+proc createDescriptorSets(app: VulkanTutorialApp) =
+    var
+        layouts: seq[VkDescriptorSetLayout] = newSeq[VkDescriptorSetLayout](MAX_FRAMES_IN_FLIGHT)
+    for i in 0..<MAX_FRAMES_IN_FLIGHT:
+        layouts[i] = app.descriptorSetLayout
+    let allocInfo : VkDescriptorSetAllocateInfo = newVkDescriptorSetAllocateInfo(
+        descriptorPool = app.descriptorPool,
+        descriptorSetCount = MAX_FRAMES_IN_FLIGHT,
+        pSetLayouts = addr layouts[0]
+    )
+    app.descriptorSets = newSeq[VkDescriptorSet](MAX_FRAMES_IN_FLIGHT)
+    if vkAllocateDescriptorSets(app.device, addr allocInfo, addr app.descriptorSets[0]) != VK_SUCCESS:
+        raise newException(RuntimeException, "failed to allocate descriptor sets!")
+    for i in 0..<MAX_FRAMES_IN_FLIGHT:
+        let
+            bufferInfo : VkDescriptorBufferInfo = newVkDescriptorBufferInfo(
+                buffer = app.uniformBuffers[i],
+                offset = 0.VkDeviceSize,
+                range = sizeof(UniformBufferObject).VkDeviceSize
+            )
+            descriptorWrite : VkWriteDescriptorSet = newVkWriteDescriptorSet(
+                dstSet = app.descriptorSets[i],
+                dstBinding = 0.uint32,
+                dstArrayElement = 0.uint32,
+                descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                descriptorCount = 1.uint32,
+                pBufferInfo = addr bufferInfo,
+                pImageInfo = nil,
+                pTexelBufferView = nil
+            )
+        vkUpdateDescriptorSets(app.device, 1, addr descriptorWrite, 0, nil)
+
 proc createCommandBuffers(app: VulkanTutorialApp) =
     app.commandBuffers.setLen(MAX_FRAMES_IN_FLIGHT)
     let allocInfo: VkCommandBufferAllocateInfo = newVkCommandBufferAllocateInfo(
@@ -764,6 +848,7 @@ proc recordCommandBuffer(app: VulkanTutorialApp, commandBuffer: var VkCommandBuf
     vkCmdSetScissor(commandBuffer, 0, 1, addr scissor)
     vkCmdBindVertexBuffers(commandBuffer, 0, 1, addr vertexBuffers[0], addr offsets[0])
     vkCmdBindIndexBuffer(commandBuffer, app.indexBuffer, 0.VkDeviceSize, VK_INDEX_TYPE_UINT16) # possible types are VK_INDEX_TYPE_UINT16 and VK_INDEX_TYPE_UINT32
+    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, app.pipelineLayout, 0, 1, addr app.descriptorSets[app.currentFrame], 0, nil)
     vkCmdDrawIndexed(commandBuffer, sceneIndices.len.uint32, 1, 0, 0, 0)
     vkCmdEndRenderPass(commandBuffer)
     if vkEndCommandBuffer(commandBuffer) != VK_SUCCESS:
@@ -779,10 +864,31 @@ proc createSyncObjects(app: VulkanTutorialApp) =
             flags = VkFenceCreateFlags(VK_FENCE_CREATE_SIGNALED_BIT)
         )
     for i in countup(0,cast[int](MAX_FRAMES_IN_FLIGHT-1)):
-        if  (vkCreateSemaphore(app.device, addr semaphoreInfo, nil, addr app.imageAvailableSemaphores[i]) != VK_SUCCESS) or 
-            (vkCreateSemaphore(app.device, addr semaphoreInfo, nil, addr app.renderFinishedSemaphores[i]) != VK_SUCCESS) or 
+        if  (vkCreateSemaphore(app.device, addr semaphoreInfo, nil, addr app.imageAvailableSemaphores[i]) != VK_SUCCESS) or
+            (vkCreateSemaphore(app.device, addr semaphoreInfo, nil, addr app.renderFinishedSemaphores[i]) != VK_SUCCESS) or
             (vkCreateFence(app.device, addr fenceInfo, nil, addr app.inFlightFences[i]) != VK_SUCCESS):
                 raise newException(RuntimeException, "failed to create sync Objects!")
+
+proc updateUniformBuffer(app: VulkanTutorialApp, currentImage: uint32) =
+    var
+        currentTime = getMonoTime().ticks
+        time: float = (currentTime - startTime).float32
+        ubo: UniformBufferObject = UniformBufferObject(
+            model: rotate((time * toRadians(90.0f)).float32, vec3(0.0f,0.0f,1.0f)),
+            view: lookAt(vec3(2.0f,2.0f,2.0f), vec3(0.0f,0.0f,0.0f), vec3(0.0f,0.0f,1.0f)), # Will be deprecated next vmath version use toAngles and figure out RH coord system
+            proj: perspective[float32](45.0f, (app.swapChainExtent.width.float32 / app.swapChainExtent.height.float32), 0.1f, 10.0f),
+        )
+    ubo.proj = toVulY(ubo.proj)
+    copyMem(app.uniformBuffersMapped[currentImage], addr ubo, sizeof(ubo))
+    let
+        alignedSize : uint32 = (sizeof(ubo) - 1) - ((sizeof(ubo) - 1) mod app.deviceProperties.limits.nonCoherentAtomSize.uint32) + app.deviceProperties.limits.nonCoherentAtomSize.uint32
+        uniformRange: VkMappedMemoryRange = newVkMappedMemoryRange(
+            memory = app.uniformBuffersMemory[currentImage],
+            offset = 0.VkDeviceSize,
+            size   = alignedSize.VkDeviceSize
+        )
+    discard vkFlushMappedMemoryRanges(app.device, 1, addr uniformRange)
+
 
 proc drawFrame(app: VulkanTutorialApp) =
     discard vkWaitForFences(app.device, 1, addr app.inFlightFences[app.currentFrame], VkBool32(VK_TRUE), uint64.high)
@@ -799,6 +905,7 @@ proc drawFrame(app: VulkanTutorialApp) =
 
     discard vkResetCommandBuffer(app.commandBuffers[app.currentFrame], VkCommandBufferResetFlags(0))
     app.recordCommandBuffer(app.commandBuffers[app.currentFrame], imageIndex)
+    app.updateUniformBuffer(app.currentFrame)
     let
         waitSemaphores: array[1, VkSemaphore] = [app.imageAvailableSemaphores[app.currentFrame]]
         waitStages: array[1, VkPipelineStageFlags] = [VkPipelineStageFlags(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT)]
@@ -840,11 +947,15 @@ proc initVulkan(app: VulkanTutorialApp) =
     app.createSwapChain()
     app.createImageViews()
     app.createRenderPass()
+    app.createDescriptorSetLayout()
     app.createGraphicsPipeline()
     app.createFrameBuffers()
     app.createCommandPool()
     app.createVertexBuffer()
     app.createIndexBuffer()
+    app.createUniformBuffers()
+    app.createDescriptorPool()
+    app.createDescriptorSets()
     app.createCommandBuffers()
     app.createSyncObjects()
     app.framebufferResized = false
@@ -866,6 +977,11 @@ proc cleanup(app: VulkanTutorialApp) =
     vkDestroyPipelineLayout(app.device, app.pipelineLayout, nil)
     vkDestroyRenderPass(app.device, app.renderPass, nil)
     app.cleanupSwapChain()
+    for i in 0..<MAX_FRAMES_IN_FLIGHT:
+        vkDestroyBuffer(app.device, app.uniformBuffers[i], nil)
+        vkFreeMemory(app.device, app.uniformBuffersMemory[i], nil)
+    vkDestroyDescriptorPool(app.device, app.descriptorPool, nil)
+    vkDestroyDescriptorSetLayout(app.device, app.descriptorSetLayout, nil)
     vkDestroyBuffer(app.device, app.vertexBuffer, nil)
     vkFreeMemory(app.device, app.vertexBufferMemory, nil)
     vkDestroyBuffer(app.device, app.indexBuffer, nil);
