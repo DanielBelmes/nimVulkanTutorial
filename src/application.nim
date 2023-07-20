@@ -9,6 +9,7 @@ from errors import RuntimeException
 import types
 import utils
 import std/monotimes
+import std/times
 
 const
     validationLayers = ["VK_LAYER_KHRONOS_validation"]
@@ -33,7 +34,7 @@ let
     sceneIndices: seq[uint16] = @[
         0,1,2,2,3,0
     ]
-    startTime: int64 = getMonoTime().ticks
+    startTime: MonoTime = getMonoTime()
 
 
 proc getBindingDescription(vertex: typedesc[Vertex]) : VkVertexInputBindingDescription =
@@ -871,10 +872,10 @@ proc createSyncObjects(app: VulkanTutorialApp) =
 
 proc updateUniformBuffer(app: VulkanTutorialApp, currentImage: uint32) =
     var
-        currentTime = getMonoTime().ticks
-        time: float = (currentTime - startTime).float32
+        currentTime = getMonoTime()
+        time: float = (currentTime - startTime).inMilliseconds.float32
         ubo: UniformBufferObject = UniformBufferObject(
-            model: rotate((time * toRadians(90.0f)).float32, vec3(0.0f,0.0f,1.0f)),
+            model: rotate((time * toRadians(0.05f)).float32, vec3(0.0f,0.0f,1.0f)),
             view: lookAt(vec3(2.0f,2.0f,2.0f), vec3(0.0f,0.0f,0.0f), vec3(0.0f,0.0f,1.0f)), # Will be deprecated next vmath version use toAngles and figure out RH coord system
             proj: perspective[float32](45.0f, (app.swapChainExtent.width.float32 / app.swapChainExtent.height.float32), 0.1f, 10.0f),
         )
