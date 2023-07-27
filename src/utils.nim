@@ -6,11 +6,11 @@ proc cStringToString*(arr: openArray[char]): string =
 
 type
     Vertex* = object
-        pos*: Vec2
+        pos*: Vec3
         color*: Vec3
         texCoord*: Vec2
 
-proc vertex*(pos: Vec2, color: Vec3, texCoord: Vec2): Vertex =
+proc vertex*(pos: Vec3, color: Vec3, texCoord: Vec2): Vertex =
     result = Vertex(pos : pos, color: color, texCoord: texCoord)
 
 type
@@ -25,4 +25,12 @@ const vulMat4Y = mat4( # Conversion matrix from OpenGL's Y[0..1] to Vulkan's Y[0
     0.0, 0.0,  1.0, 0.0,
     0.0, 0.0,  0.0, 1.0,
 )
+const vulMat4Z = mat4(
+    1.0, 0.0, 0.0, 0.0,
+    0.0, 1.0, 0.0, 0.0,
+    0.0, 0.0, 0.5, 0.0,
+    0.0, 0.0, 0.5, 1.0,
+)
+
 proc toVulY*[T](proj :GMat4[T]) :GMat4[T]=  proj*vulMat4Y
+proc toVulZ*[T](proj :GMat4[T]) :GMat4[T]=  proj*vulMat4Z

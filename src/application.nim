@@ -27,13 +27,19 @@ else:
 
 let
     vertices: seq[Vertex] = @[
-        vertex(vec2(-0.5, -0.5),vec3(1.0, 0.0, 0.0),vec2(1.0f,0.0f)),
-        vertex(vec2(0.5, -0.5),vec3(0.0,1.0,0.0),vec2(0.0f,0.0f)),
-        vertex(vec2(0.5, 0.5),vec3(0.0, 0.0, 1.0),vec2(0.0f,1.0f)),
-        vertex(vec2(-0.5, 0.5),vec3(1.0, 1.0, 1.0),vec2(1.0f,1.0f))
+        vertex(vec3(-0.5, -0.5, 0.0),vec3(1.0, 0.0, 0.0),vec2(1.0,0.0)),
+        vertex(vec3(0.5, -0.5, 0.0),vec3(0.0,1.0,0.0),vec2(0.0,0.0)),
+        vertex(vec3(0.5, 0.5, 0.0),vec3(0.0, 0.0, 1.0),vec2(0.0,1.0)),
+        vertex(vec3(-0.5, 0.5, 0.0),vec3(1.0, 1.0, 1.0),vec2(1.0,1.0)),
+
+        vertex(vec3(-0.5, -0.5, -0.5),vec3(1.0, 0.0, 0.0),vec2(1.0,0.0)),
+        vertex(vec3(0.5, -0.5, -0.5),vec3(0.0,1.0,0.0),vec2(0.0,0.0)),
+        vertex(vec3(0.5, 0.5, -0.5),vec3(0.0, 0.0, 1.0),vec2(0.0,1.0)),
+        vertex(vec3(-0.5, 0.5, -0.5),vec3(1.0, 1.0, 1.0),vec2(1.0,1.0))
     ]
     sceneIndices: seq[uint16] = @[
-        0,1,2,2,3,0
+        0,1,2,2,3,0,
+        4,5,6,6,7,4
     ]
     startTime: MonoTime = getMonoTime()
 
@@ -50,7 +56,7 @@ proc getAttributeDescriptions(vertex: typedesc[Vertex]) : array[3, VkVertexInput
         newVkVertexInputAttributeDescription(
             binding = 0,
             location = 0,
-            format = VK_FORMAT_R32G32_SFLOAT,
+            format = VK_FORMAT_R32G32B32_SFLOAT,
             offset = offsetOf(Vertex, pos).uint32
         ),
         newVkVertexInputAttributeDescription(
@@ -100,6 +106,9 @@ type
         textureImageMemory: VkDeviceMemory
         textureImageView: VkImageView
         textureSampler: VkSampler
+        depthImage: VkImage
+        depthImageMemory: VkDeviceMemory
+        depthImageView: VkImageView
         descriptorPool: VkDescriptorPool
         descriptorSets: seq[VkDescriptorSet]
         commandBuffers: seq[VkCommandBuffer]
@@ -382,7 +391,7 @@ proc createSwapChain(app: VulkanTutorialApp) =
 proc createImageViews(app: VulkanTutorialApp) =
     app.swapChainImageViews.setLen(app.swapChainImages.len)
     for index, swapChainImage in app.swapChainImages:
-        app.swapChainImageViews[index] = app.createImageView(app.swapChainImages[index], app.swapChainImageFormat)
+        app.swapChainImageViews[index] = app.createImageView(app.swapChainImages[index], app.swapChainImageFormat, VK_IMAGE_ASPECT_COLOR_BIT.VkImageAspectFlags)
 
 proc createShaderModule(app: VulkanTutorialApp, code: string) : VkShaderModule =
     var createInfo = newVkShaderModuleCreateInfo(
@@ -408,22 +417,38 @@ proc createRenderPass(app: VulkanTutorialApp) =
             attachment = 0,
             layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
         )
+        depthAttachment: VkAttachmentDescription = newVkAttachmentDescription(
+            format = app.findDepthFormat(),
+            samples = VK_SAMPLE_COUNT_1_BIT,
+            loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+            storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+            stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+            stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+            initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+            finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+        )
+        depthAttachmentRef: VkAttachmentReference = VkAttachmentReference(
+            attachment: 1,
+            layout: VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+        )
         subpass = VkSubpassDescription(
             pipelineBindPoint: VK_PIPELINE_BIND_POINT_GRAPHICS,
             colorAttachmentCount: 1,
             pColorAttachments: addr colorAttachmentRef,
+            pDepthStencilAttachment: addr depthAttachmentRef
         )
+        attachments: array[2, VkAttachmentDescription] = [colorAttachment,depthAttachment]
         dependency: VkSubpassDependency = VkSubpassDependency(
             srcSubpass: VK_SUBPASS_EXTERNAL,
             dstSubpass: 0,
-            srcStageMask: VkPipelineStageFlags(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT),
-            srcAccessMask: VkAccessFlags(0),
-            dstStageMask: VkPipelineStageFlags(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT),
-            dstAccessMask: VkAccessFlags(VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT),
+            srcStageMask: VkPipelineStageFlags(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT or VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT),
+            srcAccessMask: VkAccessFlags(VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT),
+            dstStageMask: VkPipelineStageFlags(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT or VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT),
+            dstAccessMask: VkAccessFlags(VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT or VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT),
         )
         renderPassInfo: VkRenderPassCreateInfo = newVkRenderPassCreateInfo(
-            attachmentCount = 1,
-            pAttachments = addr colorAttachment,
+            attachmentCount = attachments.len.uint32,
+            pAttachments = addr attachments[0],
             subpassCount = 1,
             pSubpasses = addr subpass,
             dependencyCount = 1,
@@ -533,10 +558,20 @@ proc createGraphicsPipeline(app: VulkanTutorialApp) =
             alphaToCoverageEnable = VkBool32(VK_FALSE),
             alphaToOneEnable = VkBool32(VK_FALSE)
         )
-        # [NOTE] Not doing VkPipelineDepthStencilStateCreateInfo because we don't have a depth or stencil buffer yet
+        depthStencil: VkPipelineDepthStencilStateCreateInfo = newVkPipelineDepthStencilStateCreateInfo(
+            depthTestEnable = VkBool32(VK_TRUE),
+            depthWriteEnable = VkBool32(VK_TRUE),
+            depthCompareOp = VK_COMPARE_OP_LESS,
+            depthBoundsTestEnable = VkBool32(VK_FALSE),
+            minDepthBounds = 0.0f, # optional
+            maxDepthBounds = 1.0f, # optional
+            stencilTestEnable = VkBool32(VK_FALSE),
+            front = VkStencilOpState(),
+            back = VkStencilOpState()
+        )
         colorBlendAttachment: VkPipelineColorBlendAttachmentState = newVkPipelineColorBlendAttachmentState(
             colorWriteMask = VkColorComponentFlags(bitor(VK_COLOR_COMPONENT_R_BIT.int32, bitor(VK_COLOR_COMPONENT_G_BIT.int32, bitor(VK_COLOR_COMPONENT_B_BIT.int32, VK_COLOR_COMPONENT_A_BIT.int32)))),
-            blendEnable = VkBool32(VK_FALSE),
+            blendEnable = VkBool32(VK_FALSE), # remember to enable to use transparent images
             srcColorBlendFactor = VK_BLEND_FACTOR_ONE, # optional
             dstColorBlendFactor = VK_BLEND_FACTOR_ZERO, # optional
             colorBlendOp = VK_BLEND_OP_ADD, # optional
@@ -568,7 +603,7 @@ proc createGraphicsPipeline(app: VulkanTutorialApp) =
             pViewportState = viewportState.addr,
             pRasterizationState = rasterizer.addr,
             pMultisampleState = multisampling.addr,
-            pDepthStencilState = nil, # optional
+            pDepthStencilState = addr depthStencil,
             pColorBlendState = colorBlending.addr,
             pDynamicState = dynamicState.addr, # optional
             pTessellationState = nil,
@@ -588,7 +623,7 @@ proc createFrameBuffers(app: VulkanTutorialApp) =
 
     for index, view in app.swapChainImageViews:
         var
-            attachments = [app.swapChainImageViews[index]]
+            attachments : array[2,VkImageView] = [app.swapChainImageViews[index],app.depthImageView]
             framebufferInfo = newVkFramebufferCreateInfo(
                 sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
                 renderPass = app.renderPass,
@@ -622,6 +657,7 @@ proc recreateSwapChain(app: VulkanTutorialApp) =
 
     app.createSwapChain()
     app.createImageViews()
+    app.createDepthResources()
     app.createFramebuffers()
 
 proc createCommandPool(app: VulkanTutorialApp) =
@@ -633,6 +669,31 @@ proc createCommandPool(app: VulkanTutorialApp) =
         )
     if vkCreateCommandPool(app.device, addr poolInfo, nil, addr app.commandPool) != VK_SUCCESS:
         raise newException(RuntimeException, "failed to create command pool!")
+
+proc hasStencilComponent(format: VkFormat): bool =
+    return format == VK_FORMAT_D32_SFLOAT_S8_UINT or format == VK_FORMAT_D24_UNORM_S8_UINT
+
+proc findSupportedFormat(app: VulkanTutorialApp, canidates: seq[VkFormat], tiling: VkImageTiling, features: VkFormatFeatureFlags): VkFormat =
+    for format in canidates:
+        var props: VkFormatProperties
+        vkGetPhysicalDeviceFormatProperties(app.physicalDevice, format, addr props)
+        if tiling == VK_IMAGE_TILING_LINEAR and (props.linearTilingFeatures.int and features.int) == features.int:
+            return format
+        elif tiling == VK_IMAGE_TILING_OPTIMAL and (props.optimalTilingFeatures.int and features.int) == features.int:
+            return format
+
+    raise newException(RuntimeException,"failed to find supported format!")
+
+proc findDepthFormat(app: VulkanTutorialApp): VkFormat =
+    return app.findSupportedFormat(@[VK_FORMAT_D32_SFLOAT, VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_D24_UNORM_S8_UINT],VK_IMAGE_TILING_OPTIMAL,VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT.VkFormatFeatureFlags)
+
+proc createDepthResources(app: VulkanTutorialApp) =
+    var depthFormat: VkFormat = app.findDepthFormat()
+    app.createImage(app.swapChainExtent.width, app.swapChainExtent.height, depthFormat, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT.VkImageUsageFlags, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT.VkMemoryPropertyFlags, app.depthImage, app.depthImageMemory);
+    app.depthImageView = app.createImageView(app.depthImage, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT.VkImageAspectFlags);
+
+    app.transitionImageLayout(app.depthImage, depthFormat, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
+
 
 proc findMemoryType(app: VulkanTutorialApp, typeFilter: uint32, properties: VkMemoryPropertyFlags) : uint32 =
     var memProperties: VkPhysicalDeviceMemoryProperties
@@ -826,10 +887,10 @@ proc createImage(app: VulkanTutorialApp, width: uint32, height: uint32, format: 
             ),
             mipLevels = 1,
             arrayLayers = 1,
-            format = VK_FORMAT_B8G8R8A8_SRGB,
-            tiling = VK_IMAGE_TILING_OPTIMAL,
+            format = format,
+            tiling = tiling,
             initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-            usage = (VK_IMAGE_USAGE_TRANSFER_DST_BIT or VK_IMAGE_USAGE_SAMPLED_BIT).VkImageUsageFlags,
+            usage = usage,
             sharingMode = VK_SHARING_MODE_EXCLUSIVE,
             samples = VK_SAMPLE_COUNT_1_BIT,
             flags = 0.VkImageCreateFlags,
@@ -900,6 +961,14 @@ proc transitionImageLayout(app: VulkanTutorialApp, image: VkImage, format: VkFor
         sourceStage: VkPipelineStageFlags
         destinationStage: VkPipelineStageFlags
 
+    if newLayout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
+        barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT.VkImageAspectFlags
+
+        if hasStencilComponent(format):
+            barrier.subresourceRange.aspectMask = (barrier.subresourceRange.aspectMask.uint32 or VK_IMAGE_ASPECT_STENCIL_BIT.uint32).VkImageAspectFlags
+    else:
+        barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT.VkImageAspectFlags
+
     if oldLayout == VK_IMAGE_LAYOUT_UNDEFINED and newLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
         barrier.srcAccessMask = 0.VkAccessFlags
         barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT.VkAccessFlags
@@ -912,6 +981,12 @@ proc transitionImageLayout(app: VulkanTutorialApp, image: VkImage, format: VkFor
 
         sourceStage = VK_PIPELINE_STAGE_TRANSFER_BIT.VkPipelineStageFlags
         destinationStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT.VkPipelineStageFlags
+    elif oldLayout == VK_IMAGE_LAYOUT_UNDEFINED and newLayout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
+        barrier.srcAccessMask = 0.VkAccessFlags
+        barrier.dstAccessMask = (VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT or VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT).VkAccessFlags
+
+        sourceStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT.VkPipelineStageFlags
+        destinationStage = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT.VkPipelineStageFlags
     else:
         raise newException(RuntimeException,"unsupported layout transition!")
 
@@ -971,13 +1046,13 @@ proc copyBufferToImage(app: VulkanTutorialApp, buffer: VkBuffer, image: VkImage,
  still set up correctly.
 ]#
 
-proc createImageView(app: VulkanTutorialApp, image: VkImage, format: VkFormat): VkImageView =
+proc createImageView(app: VulkanTutorialApp, image: VkImage, format: VkFormat, aspectFlags: VkImageAspectFlags): VkImageView =
     var viewInfo: VkImageViewCreateInfo = VkImageViewCreateInfo(
         image: image,
         viewType: VK_IMAGE_VIEW_TYPE_2D,
         format: format,
         subresourceRange: newVkImageSubresourceRange(
-            aspectMask = VK_IMAGE_ASPECT_COLOR_BIT.VkImageAspectFlags,
+            aspectMask = aspectFlags,
             baseMipLevel = 0,
             levelCount = 1,
             baseArrayLayer = 0,
@@ -989,7 +1064,7 @@ proc createImageView(app: VulkanTutorialApp, image: VkImage, format: VkFormat): 
 
 
 proc createTextureImageView(app: VulkanTutorialApp) =
-    app.textureImageView = app.createImageView(app.textureImage,VK_FORMAT_R8G8B8A8_SRGB)
+    app.textureImageView = app.createImageView(app.textureImage,VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_ASPECT_COLOR_BIT.VkImageAspectFlags)
 
 proc createTextureSampler(app: VulkanTutorialApp) =
     var samplerInfo: VkSamplerCreateInfo = newVkSamplerCreateInfo(
@@ -1071,7 +1146,10 @@ proc recordCommandBuffer(app: VulkanTutorialApp, commandBuffer: var VkCommandBuf
         raise newException(RuntimeException, "failed to begin recording command buffer!")
 
     let
-        clearColor: VkClearValue = VkClearValue(color: VkClearColorValue(float32: [0f, 0f, 0f, 1f]))
+        clearValues : array[2,VkClearValue] = [
+            VkClearValue(color: VkClearColorValue(float32: [0f, 0f, 0f, 1f])),
+            VkClearValue(depthStencil: VkClearDepthStencilValue(depth: 1.0f, stencil: 0))
+        ]
         renderPassInfo: VkRenderPassBeginInfo = newVkRenderPassBeginInfo(
             renderPass = app.renderPass,
             framebuffer = app.swapChainFrameBuffers[imageIndex],
@@ -1079,8 +1157,8 @@ proc recordCommandBuffer(app: VulkanTutorialApp, commandBuffer: var VkCommandBuf
                 offset: VkOffset2d(x: 0,y: 0),
                 extent: app.swapChainExtent
             ),
-            clearValueCount = 1,
-            pClearValues = addr clearColor
+            clearValueCount = clearValues.len.uint32,
+            pClearValues = addr clearValues[0]
         )
     vkCmdBeginRenderPass(commandBuffer, renderPassInfo.addr, VK_SUBPASS_CONTENTS_INLINE)
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, app.graphicsPipeline)
@@ -1204,8 +1282,9 @@ proc initVulkan(app: VulkanTutorialApp) =
     app.createRenderPass()
     app.createDescriptorSetLayout()
     app.createGraphicsPipeline()
-    app.createFrameBuffers()
     app.createCommandPool()
+    app.createDepthResources()
+    app.createFrameBuffers()
     app.createTextureImage()
     app.createTextureImageView()
     app.createTextureSampler()
@@ -1238,6 +1317,7 @@ proc cleanup(app: VulkanTutorialApp) =
     vkDestroySampler(app.device, app.textureSampler, nil)
     vkDestroyImageView(app.device, app.textureImageView, nil)
     vkDestroyImage(app.device, app.textureImage, nil)
+    vkFreeMemory(app.device, app.depthImageMemory, nil)
     vkFreeMemory(app.device, app.textureImageMemory, nil)
     for i in 0..<MAX_FRAMES_IN_FLIGHT:
         vkDestroyBuffer(app.device, app.uniformBuffers[i], nil)
