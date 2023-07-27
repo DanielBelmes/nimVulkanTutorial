@@ -10,6 +10,7 @@ import types
 import utils
 import std/monotimes
 import std/times
+import stb_nim/stb_image
 
 const
     validationLayers = ["VK_LAYER_KHRONOS_validation"]
@@ -26,10 +27,10 @@ else:
 
 let
     vertices: seq[Vertex] = @[
-        vertex(vec2(-0.5, -0.5),vec3(1.0, 0.0, 0.0)),
-        vertex(vec2(0.5, -0.5),vec3(0.0,1.0,0.0)),
-        vertex(vec2(0.5, 0.5),vec3(0.0, 0.0, 1.0)),
-        vertex(vec2(-0.5, 0.5),vec3(1.0, 1.0, 1.0))
+        vertex(vec2(-0.5, -0.5),vec3(1.0, 0.0, 0.0),vec2(1.0f,0.0f)),
+        vertex(vec2(0.5, -0.5),vec3(0.0,1.0,0.0),vec2(0.0f,0.0f)),
+        vertex(vec2(0.5, 0.5),vec3(0.0, 0.0, 1.0),vec2(0.0f,1.0f)),
+        vertex(vec2(-0.5, 0.5),vec3(1.0, 1.0, 1.0),vec2(1.0f,1.0f))
     ]
     sceneIndices: seq[uint16] = @[
         0,1,2,2,3,0
@@ -44,8 +45,8 @@ proc getBindingDescription(vertex: typedesc[Vertex]) : VkVertexInputBindingDescr
         inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
     )
 
-proc getAttributeDescriptions(vertex: typedesc[Vertex]) : array[2, VkVertexInputAttributeDescription] =
-    var attributeDescriptions: array[2,VkVertexInputAttributeDescription] = [
+proc getAttributeDescriptions(vertex: typedesc[Vertex]) : array[3, VkVertexInputAttributeDescription] =
+    var attributeDescriptions: array[3,VkVertexInputAttributeDescription] = [
         newVkVertexInputAttributeDescription(
             binding = 0,
             location = 0,
@@ -57,6 +58,12 @@ proc getAttributeDescriptions(vertex: typedesc[Vertex]) : array[2, VkVertexInput
             location = 1,
             format = VK_FORMAT_R32G32B32_SFLOAT,
             offset = offsetOf(Vertex, color).uint32
+        ),
+        newVkVertexInputAttributeDescription(
+            binding = 0,
+            location = 2,
+            format = VK_FORMAT_R32G32_SFLOAT,
+            offset = offsetOf(Vertex, texCoord).uint32
         )
     ]
     result = attributeDescriptions
@@ -89,6 +96,10 @@ type
         uniformBuffers: seq[VkBuffer]
         uniformBuffersMemory: seq[VkDeviceMemory]
         uniformBuffersMapped: seq[pointer]
+        textureImage: VkImage
+        textureImageMemory: VkDeviceMemory
+        textureImageView: VkImageView
+        textureSampler: VkSampler
         descriptorPool: VkDescriptorPool
         descriptorSets: seq[VkDescriptorSet]
         commandBuffers: seq[VkCommandBuffer]
@@ -256,13 +267,16 @@ proc findQueueFamilies(app: VulkanTutorialApp, pDevice: VkPhysicalDevice): Queue
         index.inc
 
 proc isDeviceSuitable(app: VulkanTutorialApp, pDevice: VkPhysicalDevice): bool =
-    var indices: QueueFamilyIndices = app.findQueueFamilies(pDevice)
-    var extensionsSupported = app.checkDeviceExtensionSupport(pDevice)
-    var swapChainAdequate = false
+    var
+        indices: QueueFamilyIndices = app.findQueueFamilies(pDevice)
+        extensionsSupported = app.checkDeviceExtensionSupport(pDevice)
+        swapChainAdequate = false
+        supportedFeatures: VkPhysicalDeviceFeatures
+    vkGetPhysicalDeviceFeatures(pDevice, addr supportedFeatures)
     if extensionsSupported:
         var swapChainSupport: SwapChainSupportDetails = app.querySwapChainSupport(pDevice)
         swapChainAdequate = swapChainSupport.formats.len != 0 and swapChainSupport.presentModes.len != 0
-    return indices.isComplete and extensionsSupported and swapChainAdequate
+    return indices.isComplete and extensionsSupported and swapChainAdequate and supportedFeatures.samplerAnisotropy.bool
 
 proc pickPhysicalDevice(app: VulkanTutorialApp) =
     var deviceCount: uint32 = 0
@@ -296,12 +310,12 @@ proc createLogicalDevice(app: VulkanTutorialApp) =
         queueCreateInfos.add(deviceQueueCreateInfo)
 
     var
-        deviceFeatures = newSeq[VkPhysicalDeviceFeatures](1)
+        deviceFeatures: VkPhysicalDeviceFeatures = VkPhysicalDeviceFeatures(samplerAnisotropy: VK_TRUE.VkBool32)
         deviceExts = allocCStringArray(deviceExtensions)
         deviceCreateInfo = newVkDeviceCreateInfo(
             pQueueCreateInfos = queueCreateInfos[0].addr,
             queueCreateInfoCount = queueCreateInfos.len.uint32,
-            pEnabledFeatures = deviceFeatures[0].addr,
+            pEnabledFeatures = addr deviceFeatures,
             enabledExtensionCount = deviceExtensions.len.uint32,
             enabledLayerCount = 0,
             ppEnabledLayerNames = nil,
@@ -368,15 +382,7 @@ proc createSwapChain(app: VulkanTutorialApp) =
 proc createImageViews(app: VulkanTutorialApp) =
     app.swapChainImageViews.setLen(app.swapChainImages.len)
     for index, swapChainImage in app.swapChainImages:
-        var createInfo = newVkImageViewCreateInfo(
-            image = swapChainImage,
-            viewType = VK_IMAGE_VIEW_TYPE_2D,
-            format = app.swapChainImageFormat,
-            components = newVkComponentMapping(VK_COMPONENT_SWIZZLE_IDENTITY,VK_COMPONENT_SWIZZLE_IDENTITY,VK_COMPONENT_SWIZZLE_IDENTITY,VK_COMPONENT_SWIZZLE_IDENTITY),
-            subresourceRange = newVkImageSubresourceRange(aspectMask = VkImageAspectFlags(VK_IMAGE_ASPECT_COLOR_BIT), 0.uint32, 1.uint32, 0.uint32, 1.uint32)
-        )
-        if vkCreateImageView(app.device, addr createInfo, nil, addr app.swapChainImageViews[index]) != VK_SUCCESS:
-            raise newException(RuntimeException, "failed to create image views")
+        app.swapChainImageViews[index] = app.createImageView(app.swapChainImages[index], app.swapChainImageFormat)
 
 proc createShaderModule(app: VulkanTutorialApp, code: string) : VkShaderModule =
     var createInfo = newVkShaderModuleCreateInfo(
@@ -427,17 +433,26 @@ proc createRenderPass(app: VulkanTutorialApp) =
         quit("failed to create render pass")
 
 proc createDescriptorSetLayout(app: VulkanTutorialApp) =
-    let uboLayoutBinding: VkDescriptorSetLayoutBinding = newVkDescriptorSetLayoutBinding(
-        binding = 0, # same as in vert shader
-        descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-        descriptorCount = 1,
-        stageFlags = VK_SHADER_STAGE_VERTEX_BIT.VkShaderStageFlags,
-        pImmutableSamplers = nil
-    )
+    let
+        uboLayoutBinding: VkDescriptorSetLayoutBinding = newVkDescriptorSetLayoutBinding(
+            binding = 0, # same as in vert shader
+            descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            descriptorCount = 1,
+            stageFlags = VK_SHADER_STAGE_VERTEX_BIT.VkShaderStageFlags,
+            pImmutableSamplers = nil
+        )
+        samplerLayoutBinding: VkDescriptorSetLayoutBinding = newVkDescriptorSetLayoutBinding(
+            binding = 1, # same as in vert shader
+            descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            descriptorCount = 1,
+            stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT.VkShaderStageFlags,
+            pImmutableSamplers = nil
+        )
+        bindings : array[2,VkDescriptorSetLayoutBinding] = [uboLayoutBinding,samplerLayoutBinding]
     let
         layoutInfo: VkDescriptorSetLayoutCreateInfo = newVkDescriptorSetLayoutCreateInfo(
-            bindingCount = 1,
-            pBindings = addr uboLayoutBinding
+            bindingCount = bindings.len.uint32,
+            pBindings = addr bindings[0]
         )
 
     if vkCreateDescriptorSetLayout(app.device, addr layoutInfo, nil, addr app.descriptorSetLayout) != VK_SUCCESS:
@@ -654,21 +669,7 @@ proc createBuffer(app: VulkanTutorialApp, size: VkDeviceSize, usage: VkBufferUsa
 
 
 proc copyBuffer(app: VulkanTutorialApp, srcBuffer: VkBuffer, dstBuffer: var VkBuffer, size: VkDeviceSize) =
-    var
-        allocInfo: VkCommandBufferAllocateInfo = newVkCommandBufferAllocateInfo(
-            level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-            commandPool = app.commandPool,
-            commandBufferCount = 1.uint32
-        )
-        commandBuffer: VkCommandBuffer
-    if vkAllocateCommandBuffers(app.device, addr allocInfo, addr commandBuffer) != VK_SUCCESS:
-            raise newException(RuntimeException, "failed to allocate commandBuffer for copy buffer action")
-
-    let beginInfo: VkCommandBufferBeginInfo = newVkCommandBufferBeginInfo(
-            flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT.VkCommandBufferUsageFlags,
-            pInheritanceInfo = nil
-        )
-    discard vkBeginCommandBuffer(commandBuffer, addr beginInfo)
+    var commandBuffer: VkCommandBuffer = app.beginSingleTimeCommands()
 
     let copyRegion: VkBufferCopy = newVkBufferCopy(
         srcOffset = 0.VkDeviceSize,
@@ -676,14 +677,8 @@ proc copyBuffer(app: VulkanTutorialApp, srcBuffer: VkBuffer, dstBuffer: var VkBu
         size = size
     )
     vkCmdCopyBuffer(commandBuffer, srcBuffer, dstBuffer, 1, addr copyRegion)
-    discard vkEndCommandBuffer(commandBuffer)
-    let submitInfo: VkSubmitInfo = VkSubmitInfo(
-        commandBufferCount: 1,
-        pCommandBuffers: addr commandBuffer
-    )
-    discard vkQueueSubmit(app.graphicsQueue, 1.uint32, addr submitInfo, VK_NULL_HANDLE.VkFence)
-    discard vkQueueWaitIdle(app.graphicsQueue)
-    vkFreeCommandBuffers(app.device, app.commandPool, 1, addr commandBuffer)
+
+    app.endSingleTimeCommands(commandBuffer)
 
 proc createVertexBuffer(app: VulkanTutorialApp) =
     let bufferSize : uint32 = (sizeof(vertices[0]) * vertices.len).uint32
@@ -754,13 +749,19 @@ proc createUniformBuffers(app: VulkanTutorialApp) =
 
 proc createDescriptorPool(app: VulkanTutorialApp) =
     let
-        poolSize: VkDescriptorPoolSize = newVkDescriptorPoolSize(
-            `type` = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-            descriptorCount = MAX_FRAMES_IN_FLIGHT
-        )
+        poolSizes: array[2,VkDescriptorPoolSize] = [
+            newVkDescriptorPoolSize(
+                `type` = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                descriptorCount = MAX_FRAMES_IN_FLIGHT
+            ),
+            newVkDescriptorPoolSize(
+                `type` = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                descriptorCount = MAX_FRAMES_IN_FLIGHT
+            )
+        ]
         poolInfo: VkDescriptorPoolCreateInfo = newVkDescriptorPoolCreateInfo(
-            poolSizeCount = 1,
-            pPoolSizes = addr poolSize,
+            poolSizeCount = poolSizes.len.uint32,
+            pPoolSizes = addr poolSizes[0],
             maxSets = MAX_FRAMES_IN_FLIGHT
         )
     if vkCreateDescriptorPool(app.device, addr poolInfo, nil, addr app.descriptorPool) != VK_SUCCESS:
@@ -786,17 +787,270 @@ proc createDescriptorSets(app: VulkanTutorialApp) =
                 offset = 0.VkDeviceSize,
                 range = sizeof(UniformBufferObject).VkDeviceSize
             )
-            descriptorWrite : VkWriteDescriptorSet = newVkWriteDescriptorSet(
-                dstSet = app.descriptorSets[i],
-                dstBinding = 0.uint32,
-                dstArrayElement = 0.uint32,
-                descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-                descriptorCount = 1.uint32,
-                pBufferInfo = addr bufferInfo,
-                pImageInfo = nil,
-                pTexelBufferView = nil
+            imageInfo : VkDescriptorImageInfo = newVkDescriptorImageInfo(
+                imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                imageView = app.textureImageView,
+                sampler = app.textureSampler
             )
-        vkUpdateDescriptorSets(app.device, 1, addr descriptorWrite, 0, nil)
+            descriptorWrites : array[2,VkWriteDescriptorSet] = [
+                newVkWriteDescriptorSet(
+                    dstSet = app.descriptorSets[i],
+                    dstBinding = 0,
+                    dstArrayElement = 0,
+                    descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                    descriptorCount = 1,
+                    pBufferInfo = addr bufferInfo,
+                    pImageInfo = nil,
+                    pTexelBufferView = nil
+                ),
+                newVkWriteDescriptorSet(
+                    dstSet = app.descriptorSets[i],
+                    dstBinding = 1,
+                    dstArrayElement = 0,
+                    descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                    descriptorCount = 1,
+                    pBufferInfo = nil,
+                    pImageInfo = addr imageInfo,
+                    pTexelBufferView = nil
+                )
+            ]
+        vkUpdateDescriptorSets(app.device, descriptorWrites.len.uint32, addr descriptorWrites[0], 0, nil)
+
+proc createImage(app: VulkanTutorialApp, width: uint32, height: uint32, format: VkFormat, tiling: VkImageTiling, usage: VkImageUsageFlags, properties: VkMemoryPropertyFlags, image: var VkImage, imageMemory: var VkDeviceMemory): void =
+    let imageInfo: VkImageCreateInfo = newVkImageCreateInfo(
+            imageType = VK_IMAGE_TYPE_2D,
+            extent = VkExtent3D(
+                width: width,
+                height: height,
+                depth: 1
+            ),
+            mipLevels = 1,
+            arrayLayers = 1,
+            format = VK_FORMAT_B8G8R8A8_SRGB,
+            tiling = VK_IMAGE_TILING_OPTIMAL,
+            initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+            usage = (VK_IMAGE_USAGE_TRANSFER_DST_BIT or VK_IMAGE_USAGE_SAMPLED_BIT).VkImageUsageFlags,
+            sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+            samples = VK_SAMPLE_COUNT_1_BIT,
+            flags = 0.VkImageCreateFlags,
+            queueFamilyIndexCount = 0,
+            pQueueFamilyIndices = nil
+        )
+
+    if vkCreateImage(app.device, addr imageInfo, nil, addr image) != VK_SUCCESS:
+        raise newException(RuntimeException,"failed to create image!")
+
+    var memRequirements: VkMemoryRequirements
+    vkGetImageMemoryRequirements(app.device, image, addr memRequirements)
+    var allocInfo: VkMemoryAllocateInfo = newVkMemoryAllocateInfo(
+        allocationSize = memRequirements.size,
+        memoryTypeIndex = app.findMemoryType(memRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT.VkMemoryPropertyFlags)
+    )
+
+    if vkAllocateMemory(app.device, addr allocInfo, nil, addr imageMemory) != VK_SUCCESS:
+        raise newException(RuntimeException,"failed to allocate image memory")
+
+    discard vkBindImageMemory(app.device, image, imageMemory, 0.VkDeviceSize)
+
+proc beginSingleTimeCommands(app: VulkanTutorialApp): VkCommandBuffer =
+    let allocInfo: VkCommandBufferAllocateInfo = newVkCommandBufferAllocateInfo(
+        level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+        commandPool = app.commandPool,
+        commandBufferCount = 1
+    )
+    discard vkAllocateCommandBuffers(app.device, addr allocInfo, addr result)
+
+    let beginInfo: VkCommandBufferBeginInfo = newVkCommandBufferBeginInfo(
+        flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT.VkCommandBufferUsageFlags,
+        pInheritanceInfo = nil
+    )
+
+    discard vkBeginCommandBuffer(result, addr beginInfo)
+
+proc endSingleTimeCommands(app: VulkanTutorialApp, commandBuffer: VkCommandBuffer) =
+    discard vkEndCommandBuffer(commandBuffer)
+    let submitInfo: VkSubmitInfo = VkSubmitInfo(
+        commandBufferCount: 1,
+        pCommandBuffers: addr commandBuffer
+    )
+    discard vkQueueSubmit(app.graphicsQueue, 1.uint32, addr submitInfo, VK_NULL_HANDLE.VkFence)
+    discard vkQueueWaitIdle(app.graphicsQueue)
+    vkFreeCommandBuffers(app.device, app.commandPool, 1, addr commandBuffer)
+
+proc transitionImageLayout(app: VulkanTutorialApp, image: VkImage, format: VkFormat, oldLayout: VkImageLayout, newlayout: VkImageLayout) =
+    var
+        commandBuffer: VkCommandBuffer = app.beginSingleTimeCommands()
+        barrier: VkImageMemoryBarrier = newVkImageMemoryBarrier(
+            oldlayout = oldlayout,
+            newLayout = newLayout,
+            srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            image = image,
+            subresourceRange = newVkImageSubresourceRange(
+                aspectMask = VK_IMAGE_ASPECT_COLOR_BIT.VkImageAspectFlags,
+                baseMipLevel = 0,
+                levelCount = 1,
+                baseArrayLayer = 0,
+                layerCount = 1
+            ),
+            srcAccessMask = 0.VkAccessFlags,
+            dstAccessMask = 0.VkAccessFlags
+        )
+    var
+        sourceStage: VkPipelineStageFlags
+        destinationStage: VkPipelineStageFlags
+
+    if oldLayout == VK_IMAGE_LAYOUT_UNDEFINED and newLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
+        barrier.srcAccessMask = 0.VkAccessFlags
+        barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT.VkAccessFlags
+
+        sourceStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT.VkPipelineStageFlags
+        destinationStage = VK_PIPELINE_STAGE_TRANSFER_BIT.VkPipelineStageFlags
+    elif oldLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL and newLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
+        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT.VkAccessFlags
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT.VkAccessFlags
+
+        sourceStage = VK_PIPELINE_STAGE_TRANSFER_BIT.VkPipelineStageFlags
+        destinationStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT.VkPipelineStageFlags
+    else:
+        raise newException(RuntimeException,"unsupported layout transition!")
+
+    vkCmdPipelineBarrier(
+        commandBuffer,
+        0.VkPipelineStageFlags,
+        0.VkPipelineStageFlags,
+        0.VkDependencyFlags,
+        0,
+        nil,
+        0,
+        nil,
+        1,
+        addr barrier
+    )
+    app.endSingleTimeCommands(commandBuffer)
+
+proc copyBufferToImage(app: VulkanTutorialApp, buffer: VkBuffer, image: VkImage, width: uint32, height: uint32) =
+    var
+        commandBuffer: VkCommandBuffer = app.beginSingleTimeCommands()
+        region : VkBufferImageCopy = newVkBufferImageCopy(
+            bufferOffset = 0.VkDeviceSize,
+            bufferRowLength = 0,
+            bufferImageHeight = 0,
+            imageSubresource = newVkImageSubresourceLayers(
+                aspectMask = VK_IMAGE_ASPECT_COLOR_BIT.VkImageAspectFlags,
+                mipLevel = 0,
+                baseArrayLayer = 0,
+                layerCount = 1
+            ),
+            imageOffset = newVkOffset3D(0,0,0),
+            imageExtent = VkExtent3D(
+                width: width,
+                height: height,
+                depth: 1
+            )
+        )
+    vkCmdCopyBufferToImage(
+        commandBuffer,
+        buffer,
+        image,
+        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        1,
+        addr region
+    )
+    app.endSingleTimeCommands(commandBuffer)
+#[ [TODO]
+ All of the helper functions that submit commands so far have been set up to
+ execute synchronously by waiting for the queue to become idle. For practical
+ applications it is recommended to combine these operations in a single
+ command buffer and execute them asynchronously for higher throughput,
+ especially the transitions and copy in the createTextureImage function.
+ Try to experiment with this by creating a setupCommandBuffer that the
+ helper functions record commands into, and add a flushSetupCommands to
+ execute the commands that have been recorded so far. It's best to do this
+ after the texture mapping works to check if the texture resources are
+ still set up correctly.
+]#
+
+proc createImageView(app: VulkanTutorialApp, image: VkImage, format: VkFormat): VkImageView =
+    var viewInfo: VkImageViewCreateInfo = VkImageViewCreateInfo(
+        image: image,
+        viewType: VK_IMAGE_VIEW_TYPE_2D,
+        format: format,
+        subresourceRange: newVkImageSubresourceRange(
+            aspectMask = VK_IMAGE_ASPECT_COLOR_BIT.VkImageAspectFlags,
+            baseMipLevel = 0,
+            levelCount = 1,
+            baseArrayLayer = 0,
+            layerCount = 1
+        )
+    )
+    if vkCreateImageView(app.device, addr viewInfo, nil, addr result) != VK_SUCCESS:
+        raise newException(RuntimeException,"failed to create texture image view!")
+
+
+proc createTextureImageView(app: VulkanTutorialApp) =
+    app.textureImageView = app.createImageView(app.textureImage,VK_FORMAT_R8G8B8A8_SRGB)
+
+proc createTextureSampler(app: VulkanTutorialApp) =
+    var samplerInfo: VkSamplerCreateInfo = newVkSamplerCreateInfo(
+        magFilter = VK_FILTER_LINEAR,
+        minFilter = VK_FILTER_LINEAR,
+        addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+        addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+        addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+        anisotropyEnable = VK_TRUE.VkBool32,
+        maxAnisotropy = app.deviceProperties.limits.maxSamplerAnisotropy,
+        borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK,
+        unnormalizedCoordinates = VK_FALSE.VkBool32,
+        compareEnable = VK_FALSE.VkBool32,
+        compareOp = VK_COMPARE_OP_ALWAYS,
+        mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
+        mipLodBias = 0.0f,
+        minLod = 0.0f,
+        maxLod = 0.0f
+    )
+    if vkCreateSampler(app.device, addr samplerInfo, nil, addr app.textureSampler) != VK_SUCCESS:
+        raise newException(RuntimeException,"failed to create texture sampler!")
+
+proc createTextureImage(app: VulkanTutorialApp) =
+    var
+        texWidth : int
+        texHeight : int
+        texChannels : int
+    const filename: cstring = cstring"textures/texture.jpg"
+    let
+        pixels: cstring = stbi_load(filename, addr texWidth, addr texHeight, addr texChannels, STBI_rgb_alpha)
+        imageSize: VkDeviceSize = (texWidth * texHeight * 4).VkDeviceSize
+    if pixels.isNil:
+        raise newException(RuntimeException,"failed to load texture image!")
+
+    var
+        stagingBuffer: VkBuffer
+        stagingBufferMemory: VkDeviceMemory
+
+    app.createBuffer(imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT or VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory)
+
+    var data : pointer
+    if vkMapMemory(app.device, stagingBufferMemory, 0.VkDeviceSize, imageSize, 0.VkMemoryMapFlags, addr data) != VK_SUCCESS:
+        raise newException(RuntimeException, "failed to map memory")
+    copyMem(data, addr pixels[0], imageSize.int)
+    let
+        alignedSize : uint32 = (imageSize.uint32 - 1) - ((imageSize.uint32 - 1) mod app.deviceProperties.limits.nonCoherentAtomSize.uint32) + app.deviceProperties.limits.nonCoherentAtomSize.uint32
+        vertexRange: VkMappedMemoryRange = newVkMappedMemoryRange(
+            memory = stagingBufferMemory,
+            offset = 0.VkDeviceSize,
+            size   = alignedSize.VkDeviceSize
+        )
+    discard vkFlushMappedMemoryRanges(app.device, 1, addr vertexRange)
+    vkUnmapMemory(app.device, stagingBufferMemory)
+    stbi_image_free(pixels)
+    app.createImage(texWidth.uint32,texHeight.uint32,VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TILING_OPTIMAL, (VK_IMAGE_USAGE_TRANSFER_DST_BIT or VK_IMAGE_USAGE_SAMPLED_BIT).VkImageUsageFlags, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT.VkMemoryPropertyFlags, app.textureImage, app.textureImageMemory)
+    app.transitionImageLayout(app.textureImage, VK_FORMAT_B8G8R8A8_SRGB, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
+    app.copyBufferToImage(stagingBuffer, app.textureImage, texWidth.uint32, texHeight.uint32)
+    app.transitionImageLayout(app.textureImage,VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+
+    vkDestroyBuffer(app.device, stagingBuffer, nil)
+    vkFreeMemory(app.device, stagingBufferMemory, nil)
 
 proc createCommandBuffers(app: VulkanTutorialApp) =
     app.commandBuffers.setLen(MAX_FRAMES_IN_FLIGHT)
@@ -952,6 +1206,9 @@ proc initVulkan(app: VulkanTutorialApp) =
     app.createGraphicsPipeline()
     app.createFrameBuffers()
     app.createCommandPool()
+    app.createTextureImage()
+    app.createTextureImageView()
+    app.createTextureSampler()
     app.createVertexBuffer()
     app.createIndexBuffer()
     app.createUniformBuffers()
@@ -978,6 +1235,10 @@ proc cleanup(app: VulkanTutorialApp) =
     vkDestroyPipelineLayout(app.device, app.pipelineLayout, nil)
     vkDestroyRenderPass(app.device, app.renderPass, nil)
     app.cleanupSwapChain()
+    vkDestroySampler(app.device, app.textureSampler, nil)
+    vkDestroyImageView(app.device, app.textureImageView, nil)
+    vkDestroyImage(app.device, app.textureImage, nil)
+    vkFreeMemory(app.device, app.textureImageMemory, nil)
     for i in 0..<MAX_FRAMES_IN_FLIGHT:
         vkDestroyBuffer(app.device, app.uniformBuffers[i], nil)
         vkFreeMemory(app.device, app.uniformBuffersMemory[i], nil)

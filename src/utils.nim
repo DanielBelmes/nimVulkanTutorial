@@ -8,9 +8,10 @@ type
     Vertex* = object
         pos*: Vec2
         color*: Vec3
+        texCoord*: Vec2
 
-proc vertex*(pos: Vec2, color: Vec3): Vertex =
-    result = Vertex(pos : pos, color: color)
+proc vertex*(pos: Vec2, color: Vec3, texCoord: Vec2): Vertex =
+    result = Vertex(pos : pos, color: color, texCoord: texCoord)
 
 type
     UniformBufferObject* = object
