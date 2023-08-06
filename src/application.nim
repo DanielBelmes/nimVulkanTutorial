@@ -11,6 +11,9 @@ import utils
 import std/monotimes
 import std/times
 import stb_nim/stb_image
+import std/sequtils
+import std/tables
+import objLoader
 
 const
     validationLayers = ["VK_LAYER_KHRONOS_validation"]
@@ -19,6 +22,8 @@ const
     WIDTH* = 800
     HEIGHT* = 600
     MAX_FRAMES_IN_FLIGHT: uint32 = 2
+    MODEL_PATH = "models/viking_room.obj"
+    TEXTURE_PATH = "textures/viking_room.png"
 
 when not defined(release):
     const enableValidationLayers = true
@@ -26,23 +31,7 @@ else:
     const enableValidationLayers = false
 
 let
-    vertices: seq[Vertex] = @[
-        vertex(vec3(-0.5, -0.5, 0.0),vec3(1.0, 0.0, 0.0),vec2(1.0,0.0)),
-        vertex(vec3(0.5, -0.5, 0.0),vec3(0.0,1.0,0.0),vec2(0.0,0.0)),
-        vertex(vec3(0.5, 0.5, 0.0),vec3(0.0, 0.0, 1.0),vec2(0.0,1.0)),
-        vertex(vec3(-0.5, 0.5, 0.0),vec3(1.0, 1.0, 1.0),vec2(1.0,1.0)),
-
-        vertex(vec3(-0.5, -0.5, -0.5),vec3(1.0, 0.0, 0.0),vec2(1.0,0.0)),
-        vertex(vec3(0.5, -0.5, -0.5),vec3(0.0,1.0,0.0),vec2(0.0,0.0)),
-        vertex(vec3(0.5, 0.5, -0.5),vec3(0.0, 0.0, 1.0),vec2(0.0,1.0)),
-        vertex(vec3(-0.5, 0.5, -0.5),vec3(1.0, 1.0, 1.0),vec2(1.0,1.0))
-    ]
-    sceneIndices: seq[uint16] = @[
-        0,1,2,2,3,0,
-        4,5,6,6,7,4
-    ]
     startTime: MonoTime = getMonoTime()
-
 
 proc getBindingDescription(vertex: typedesc[Vertex]) : VkVertexInputBindingDescription =
     newVkVertexInputBindingDescription(
@@ -117,6 +106,8 @@ type
         inFlightFences: seq[VkFence]
         currentFrame: uint32
         framebufferResized: bool
+        vertices: seq[Vertex] = @[]
+        sceneIndices: seq[uint32] = @[]
 
 proc initWindow(app: VulkanTutorialApp) =
     doAssert glfwInit()
@@ -741,8 +732,31 @@ proc copyBuffer(app: VulkanTutorialApp, srcBuffer: VkBuffer, dstBuffer: var VkBu
 
     app.endSingleTimeCommands(commandBuffer)
 
+proc loadModel(app: VulkanTutorialApp) =
+    var roomLoader: ObjLoader = ObjLoader(file: open(MODEL_PATH))
+    roomLoader.parseFile()
+    if roomLoader.model.isNone:
+        raise newException(RuntimeException,"Failed to Load model")
+    let model = roomLoader.model.get
+    #for tup in zip(model.geom_vertices,model.text_vertices):
+    #    let (vert,text) = tup
+    #    app.vertices.add(vertex(vert,vec3(1.0,1.0,1.0),vec2(text.x,1.0f - text.y)))
+    var uniqueVertices: Table[Vertex,uint32]
+    for mesh in model.meshes:
+        for face in mesh.faces:
+            for indx, vertIndx in face.vert_indices:
+                var vertex = Vertex(color: vec3(1.0,1.0,1.0))
+                vertex.pos = model.geom_vertices[vertIndx-1]
+                vertex.texCoord = vec2(model.text_vertices[face.text_coords[indx]-1].x,1.0f-model.text_vertices[face.text_coords[indx]-1].y) # Fix
+
+                if uniqueVertices.getOrDefault(vertex,0) == 0:
+                    uniqueVertices[vertex] = app.vertices.high.uint32 + 1
+                    app.vertices.add(vertex)
+
+                app.sceneIndices.add(uniqueVertices[vertex])
+
 proc createVertexBuffer(app: VulkanTutorialApp) =
-    let bufferSize : uint32 = (sizeof(vertices[0]) * vertices.len).uint32
+    let bufferSize : uint32 = (sizeof(app.vertices[0]) * app.vertices.len).uint32
     var
         stagingBuffer: VkBuffer
         stagingBufferMemory: VkDeviceMemory
@@ -752,7 +766,7 @@ proc createVertexBuffer(app: VulkanTutorialApp) =
     var data : pointer
     if vkMapMemory(app.device, stagingBufferMemory, 0.VkDeviceSize, bufferSize.VkDeviceSize, 0.VkMemoryMapFlags, addr data) != VK_SUCCESS:
         raise newException(RuntimeException, "failed to map memory")
-    copyMem(data, addr vertices[0], bufferSize)
+    copyMem(data, addr app.vertices[0], bufferSize)
     let
         alignedSize : uint32 = (bufferSize - 1) - ((bufferSize - 1) mod app.deviceProperties.limits.nonCoherentAtomSize.uint32) + app.deviceProperties.limits.nonCoherentAtomSize.uint32
         vertexRange: VkMappedMemoryRange = newVkMappedMemoryRange(
@@ -769,7 +783,7 @@ proc createVertexBuffer(app: VulkanTutorialApp) =
     vkFreeMemory(app.device, stagingBufferMemory, nil)
 
 proc createIndexBuffer(app: VulkanTutorialApp) =
-    let bufferSize : uint32 = (sizeof(sceneIndices[0]) * sceneIndices.len).uint32
+    let bufferSize : uint32 = (sizeof(app.sceneIndices[0]) * app.sceneIndices.len).uint32
     var
         stagingBuffer: VkBuffer
         stagingBufferMemory: VkDeviceMemory
@@ -779,7 +793,7 @@ proc createIndexBuffer(app: VulkanTutorialApp) =
     var data : pointer
     if vkMapMemory(app.device, stagingBufferMemory, 0.VkDeviceSize, bufferSize.VkDeviceSize, 0.VkMemoryMapFlags, addr data) != VK_SUCCESS:
         raise newException(RuntimeException, "failed to map memory")
-    copyMem(data, addr sceneIndices[0], bufferSize)
+    copyMem(data, addr app.sceneIndices[0], bufferSize)
     let
         alignedSize : uint32 = (bufferSize - 1) - ((bufferSize - 1) mod app.deviceProperties.limits.nonCoherentAtomSize.uint32) + app.deviceProperties.limits.nonCoherentAtomSize.uint32
         indexRange: VkMappedMemoryRange = newVkMappedMemoryRange(
@@ -1092,7 +1106,7 @@ proc createTextureImage(app: VulkanTutorialApp) =
         texWidth : int
         texHeight : int
         texChannels : int
-    const filename: cstring = cstring"textures/texture.jpg"
+    const filename: cstring = cstring(TEXTURE_PATH)
     let
         pixels: cstring = stbi_load(filename, addr texWidth, addr texHeight, addr texChannels, STBI_rgb_alpha)
         imageSize: VkDeviceSize = (texWidth * texHeight * 4).VkDeviceSize
@@ -1180,9 +1194,9 @@ proc recordCommandBuffer(app: VulkanTutorialApp, commandBuffer: var VkCommandBuf
     vkCmdSetViewport(commandBuffer, 0, 1, addr viewport)
     vkCmdSetScissor(commandBuffer, 0, 1, addr scissor)
     vkCmdBindVertexBuffers(commandBuffer, 0, 1, addr vertexBuffers[0], addr offsets[0])
-    vkCmdBindIndexBuffer(commandBuffer, app.indexBuffer, 0.VkDeviceSize, VK_INDEX_TYPE_UINT16) # possible types are VK_INDEX_TYPE_UINT16 and VK_INDEX_TYPE_UINT32
+    vkCmdBindIndexBuffer(commandBuffer, app.indexBuffer, 0.VkDeviceSize, VK_INDEX_TYPE_UINT32) # possible types are VK_INDEX_TYPE_UINT16 and VK_INDEX_TYPE_UINT32
     vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, app.pipelineLayout, 0, 1, addr app.descriptorSets[app.currentFrame], 0, nil)
-    vkCmdDrawIndexed(commandBuffer, sceneIndices.len.uint32, 1, 0, 0, 0)
+    vkCmdDrawIndexed(commandBuffer, app.sceneIndices.len.uint32, 1, 0, 0, 0)
     vkCmdEndRenderPass(commandBuffer)
     if vkEndCommandBuffer(commandBuffer) != VK_SUCCESS:
         quit("failed to record command buffer")
@@ -1288,6 +1302,7 @@ proc initVulkan(app: VulkanTutorialApp) =
     app.createTextureImage()
     app.createTextureImageView()
     app.createTextureSampler()
+    app.loadModel()
     app.createVertexBuffer()
     app.createIndexBuffer()
     app.createUniformBuffers()

@@ -15,6 +15,7 @@ bin           = @["nimVulkanTutorial"]
 requires "https://github.com/DanielBelmes/glfw#head"
 requires "https://github.com/DanielBelmes/vulkan#head"
 requires "https://github.com/DanielBelmes/stb_nim#head"
+requires "https://github.com/DanielBelmes/ObjLoader#head"
 requires "vmath"
 
 before build:
