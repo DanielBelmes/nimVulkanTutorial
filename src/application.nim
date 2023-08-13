@@ -1,6 +1,5 @@
 {.experimental: "codeReordering".}
 import std/options
-import glfw
 import sets
 import bitops
 import vulkan
@@ -14,11 +13,12 @@ import stb_nim/stb_image
 import std/sequtils
 import std/tables
 import objLoader
+from nglfw as glfw import nil
 
 const
     validationLayers = ["VK_LAYER_KHRONOS_validation"]
-    vkInstanceExtensions = [VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME]
-    deviceExtensions = [VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME,VK_KHR_SWAPCHAIN_EXTENSION_NAME]
+    vkInstanceExtensions :array[0,string]= []
+    deviceExtensions = [VK_KHR_SWAPCHAIN_EXTENSION_NAME]
     WIDTH* = 800
     HEIGHT* = 600
     MAX_FRAMES_IN_FLIGHT: uint32 = 2
@@ -66,7 +66,7 @@ proc getAttributeDescriptions(vertex: typedesc[Vertex]) : array[3, VkVertexInput
 type
     VulkanTutorialApp* = ref object
         instance: VkInstance
-        window: GLFWWindow
+        window: glfw.Window
         surface: VkSurfaceKHR
         physicalDevice: VkPhysicalDevice
         deviceProperties: VkPhysicalDeviceProperties
@@ -110,20 +110,26 @@ type
         sceneIndices: seq[uint32] = @[]
 
 proc initWindow(app: VulkanTutorialApp) =
-    doAssert glfwInit()
-    doAssert glfwVulkanSupported()
+    doAssert glfw.init()
+    doAssert glfw.vulkanSupported()
 
-    glfwWindowHint(GLFWClientApi, GLFWNoApi)
+    glfw.windowHint(glfw.ClientApi, glfw.NoApi)
 
-    app.window = glfwCreateWindow(WIDTH, HEIGHT, "Vulkan", nil, nil, icon = false)
-    if app.window == nil:
-        quit(-1)
-    setWindowUserPointer(app.window, unsafeAddr app);
-    discard setFramebufferSizeCallback(app.window, cast[GLFWFramebuffersizeFun](framebufferResizeCallback))
+    app.window = glfw.createWindow(WIDTH.cint, HEIGHT.cint, "Vulkan", nil, nil)
+    doAssert app.window != nil
+    glfw.setWindowUserPointer(app.window, unsafeAddr app);
+    discard glfw.setKeyCallback(app.window, keyCallback)
+    discard glfw.setFramebufferSizeCallback(app.window, framebufferResizeCallback)
 
-proc framebufferResizeCallback(window: GLFWWindow, width: int, height: int) {.cdecl.} =
-    let app = cast[ptr VulkanTutorialApp](getWindowUserPointer(window))
-    app.framebufferResized = true
+proc framebufferResizeCallback(window: glfw.Window, width: int32, height: int32) {.cdecl.} =
+    let app = cast[ptr VulkanTutorialApp](glfw.getWindowUserPointer(window))
+    if app.isNil: return
+    # app.framebufferResized = true
+
+proc keyCallback (window :glfw.Window; key, code, action, mods :int32) :void {.cdecl.}=
+  ## GLFW Keyboard Input Callback
+  if (key == glfw.KeyEscape and action == glfw.Press):
+    glfw.setWindowShouldClose(window, true)
 
 proc checkValidationLayerSupport(): bool =
     var layerCount: uint32
@@ -156,7 +162,7 @@ proc createInstance(app: VulkanTutorialApp) =
     var glfwExtensionCount: uint32 = 0
     var glfwExtensions: cstringArray
 
-    glfwExtensions = glfwGetRequiredInstanceExtensions(addr glfwExtensionCount)
+    glfwExtensions = glfw.getRequiredInstanceExtensions(addr glfwExtensionCount)
     var extensions: seq[string]
     for ext in cstringArrayToSeq(glfwExtensions, glfwExtensionCount):
         extensions.add(ext)
@@ -173,7 +179,7 @@ proc createInstance(app: VulkanTutorialApp) =
         enabledLayers = allocCStringArray(validationLayers)
 
     var createInfo = newVkInstanceCreateInfo(
-        flags = VkInstanceCreateFlags(0x0000001),
+        flags = VkInstanceCreateFlags(0x0000000),
         pApplicationInfo = addr appInfo,
         enabledExtensionCount = glfwExtensionCount + uint32(vkInstanceExtensions.len),
         ppEnabledExtensionNames = allExtensions,
@@ -194,7 +200,7 @@ proc createInstance(app: VulkanTutorialApp) =
         deallocCStringArray(allExtensions)
 
 proc createSurface(app: VulkanTutorialApp) =
-    if glfwCreateWindowSurface(app.instance, app.window, nil, addr app.surface) != VK_SUCCESS:
+    if glfw.createWindowSurface(app.instance, app.window, nil, addr app.surface) != VK_SUCCESS:
         raise newException(RuntimeException, "failed to create window surface")
 
 proc checkDeviceExtensionSupport(app: VulkanTutorialApp, pDevice: VkPhysicalDevice): bool =
@@ -240,7 +246,7 @@ proc chooseSwapExtent(app: VulkanTutorialApp, capabilities: VkSurfaceCapabilitie
     else:
         var width: int32
         var height: int32
-        getFramebufferSize(app.window, addr width, addr height)
+        glfw.getFramebufferSize(app.window, addr width, addr height)
         result.width = clamp(cast[uint32](width),
                                 capabilities.minImageExtent.width,
                                 capabilities.maxImageExtent.width)
@@ -638,10 +644,10 @@ proc recreateSwapChain(app: VulkanTutorialApp) =
     var
         width: int32 = 0
         height: int32 = 0
-    getFramebufferSize(app.window, addr width, addr height)
+    glfw.getFramebufferSize(app.window, addr width, addr height)
     while width == 0 or height == 0:
-        getFramebufferSize(app.window, addr width, addr height)
-        glfwWaitEvents()
+        glfw.getFramebufferSize(app.window, addr width, addr height)
+        glfw.waitEvents()
     discard vkDeviceWaitIdle(app.device)
 
     app.cleanupSwapChain()
@@ -1314,8 +1320,8 @@ proc initVulkan(app: VulkanTutorialApp) =
     app.currentFrame = 0
 
 proc mainLoop(app: VulkanTutorialApp) =
-    while not windowShouldClose(app.window):
-        glfwPollEvents()
+    while not glfw.windowShouldClose(app.window):
+        glfw.pollEvents()
         app.drawFrame()
     discard vkDeviceWaitIdle(app.device);
 
@@ -1346,8 +1352,8 @@ proc cleanup(app: VulkanTutorialApp) =
     vkDestroyDevice(app.device, nil) #destroy device before instance
     vkDestroySurfaceKHR(app.instance, app.surface, nil)
     vkDestroyInstance(app.instance, nil)
-    app.window.destroyWindow()
-    glfwTerminate()
+    glfw.destroyWindow(app.window)
+    glfw.terminate()
 
 proc run*(app: VulkanTutorialApp) =
     app.initWindow()

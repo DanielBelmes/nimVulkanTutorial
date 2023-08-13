@@ -11,12 +11,11 @@ bin           = @["nimVulkanTutorial"]
 
 
 # Dependencies
-
-requires "https://github.com/DanielBelmes/glfw#head"
+requires "vmath"
 requires "https://github.com/DanielBelmes/vulkan#head"
 requires "https://github.com/DanielBelmes/stb_nim#head"
 requires "https://github.com/DanielBelmes/ObjLoader#head"
-requires "vmath"
+requires "https://github.com/heysokam/nglfw#head"
 
 before build:
   exec("glslc src/shaders/shader.vert -o src/shaders/vert.spv")
@@ -24,4 +23,4 @@ before build:
 
 task clean, "Cleans binaries":
   echo "❯ Removing Build Dir"
-  exec("rm -rf ./build")
+  rmDir "./build"
