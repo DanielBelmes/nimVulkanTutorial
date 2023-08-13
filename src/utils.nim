@@ -1,4 +1,5 @@
 import vmath
+import std/hashes
 proc cStringToString*(arr: openArray[char]): string =
     for c in items(arr):
         if c != '\0':
@@ -12,6 +13,12 @@ type
 
 proc vertex*(pos: Vec3, color: Vec3, texCoord: Vec2): Vertex =
     result = Vertex(pos : pos, color: color, texCoord: texCoord)
+
+proc `==`*(a, b: Vertex): bool =
+    a.pos == b.pos and a.color == b.color and a.texCoord == b.texCoord
+
+proc hash*(x: Vertex): Hash =
+    result = x.pos.hash !& x.color.hash !& x.texCoord.hash # '!&' used to mix hashes
 
 type
     UniformBufferObject* = object

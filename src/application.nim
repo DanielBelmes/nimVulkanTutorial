@@ -15,10 +15,17 @@ import std/tables
 import objLoader
 from nglfw as glfw import nil
 
+when defined macosx:
+    const
+        vkInstanceExtensions = [VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME]
+        deviceExtensions = [VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME,VK_KHR_SWAPCHAIN_EXTENSION_NAME]
+else:
+    const
+        vkInstanceExtensions :array[0,string]= []
+        deviceExtensions = [VK_KHR_SWAPCHAIN_EXTENSION_NAME]
+
 const
     validationLayers = ["VK_LAYER_KHRONOS_validation"]
-    vkInstanceExtensions :array[0,string]= []
-    deviceExtensions = [VK_KHR_SWAPCHAIN_EXTENSION_NAME]
     WIDTH* = 800
     HEIGHT* = 600
     MAX_FRAMES_IN_FLIGHT: uint32 = 2
@@ -179,13 +186,15 @@ proc createInstance(app: VulkanTutorialApp) =
         enabledLayers = allocCStringArray(validationLayers)
 
     var createInfo = newVkInstanceCreateInfo(
-        flags = VkInstanceCreateFlags(0x0000000),
         pApplicationInfo = addr appInfo,
         enabledExtensionCount = glfwExtensionCount + uint32(vkInstanceExtensions.len),
         ppEnabledExtensionNames = allExtensions,
         enabledLayerCount = layerCount,
         ppEnabledLayerNames = enabledLayers,
     )
+
+    when defined macosx:
+        createInfo.flags = VkInstanceCreateFlags(0x0000001)
 
     if enableValidationLayers and not checkValidationLayerSupport():
         raise newException(RuntimeException, "validation layers requested, but not available!")
