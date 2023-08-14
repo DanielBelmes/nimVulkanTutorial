@@ -1,7 +1,7 @@
 import application
 
 if isMainModule:
-  var app: VulkanTutorialApp = new VulkanTutorialApp
+  var app: VulkanTutorialApp
 
   try:
     app.run()
