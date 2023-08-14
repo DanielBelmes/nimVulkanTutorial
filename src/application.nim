@@ -116,7 +116,7 @@ type
         vertices: seq[Vertex] = @[]
         sceneIndices: seq[uint32] = @[]
 
-proc initWindow(app: VulkanTutorialApp) =
+proc initWindow(app: var VulkanTutorialApp) =
     doAssert glfw.init()
     doAssert glfw.vulkanSupported()
 
@@ -124,14 +124,14 @@ proc initWindow(app: VulkanTutorialApp) =
 
     app.window = glfw.createWindow(WIDTH.cint, HEIGHT.cint, "Vulkan", nil, nil)
     doAssert app.window != nil
-    glfw.setWindowUserPointer(app.window, unsafeAddr app);
+    glfw.setWindowUserPointer(app.window, addr app);
     discard glfw.setKeyCallback(app.window, keyCallback)
     discard glfw.setFramebufferSizeCallback(app.window, framebufferResizeCallback)
 
 proc framebufferResizeCallback(window: glfw.Window, width: int32, height: int32) {.cdecl.} =
     let app = cast[ptr VulkanTutorialApp](glfw.getWindowUserPointer(window))
     if app.isNil: return
-    # app.framebufferResized = true
+    app.framebufferResized = true
 
 proc keyCallback (window :glfw.Window; key, code, action, mods :int32) :void {.cdecl.}=
   ## GLFW Keyboard Input Callback
@@ -1364,7 +1364,7 @@ proc cleanup(app: VulkanTutorialApp) =
     glfw.destroyWindow(app.window)
     glfw.terminate()
 
-proc run*(app: VulkanTutorialApp) =
+proc run*(app: var VulkanTutorialApp) =
     app.initWindow()
     app.initVulkan()
     app.mainLoop()
